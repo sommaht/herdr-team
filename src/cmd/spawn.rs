@@ -24,6 +24,12 @@ use crate::herdr::{HerdrError, HerdrRef};
 /// The environment variable herdr exports into every pane it owns, holding that pane's id.
 const PANE_VARIABLE: &str = "HERDR_PANE_ID";
 
+/// The caller's own workspace, used to pin where `--tab` opens.
+///
+/// Unlike [`PANE_VARIABLE`], an absent value is not an error: `--tab` still works without it, it
+/// just falls back to herdr's own default placement.
+const WORKSPACE_VARIABLE: &str = "HERDR_WORKSPACE_ID";
+
 /// How long `agent start` is retried while the new pane's shell is still starting, in milliseconds.
 ///
 /// Finding 3: creating a tab or workspace races with slow shell init, and herdr correctly refuses a
@@ -152,7 +158,10 @@ impl Cmd for SpawnArgs {
         // Everything above is read-only, so nothing exists yet if any of it failed.
         let pane = match (placement, anchor) {
             (Placement::Pane, Some(anchor)) => surface::split(&anchor, &cwd, self.focus())?,
-            (Placement::Tab, _) => surface::create_tab(&self.name, &cwd, self.focus())?,
+            (Placement::Tab, _) => {
+                let workspace = std::env::var(WORKSPACE_VARIABLE).ok();
+                surface::create_tab(workspace.as_deref(), &self.name, &cwd, self.focus())?
+            }
             (Placement::Workspace, _) => surface::create_workspace(&self.name, &cwd, self.focus())?,
             // Unreachable: `anchor` is `Some` for exactly `Placement::Pane`, three lines above.
             (Placement::Pane, None) => return Err(SpawnError::MissingAnchor),
