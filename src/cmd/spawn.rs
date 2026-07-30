@@ -184,7 +184,7 @@ impl SpawnArgs {
         agent_args: &[String],
         sink: &Sink,
     ) -> Result<Spawned, SpawnError> {
-        let started = self.start_when_settled(pane, kind, agent_args, sink)?;
+        let started = self.start_when_settled(pane, kind, agent_args)?;
 
         let Some(text) = &self.prompt else {
             return Ok(Spawned {
@@ -213,24 +213,17 @@ impl SpawnArgs {
     /// Finding 3: twice in six launches, `agent start` refused a just-created pane because its
     /// shell had not reached its prompt. herdr is right to refuse; the caller has to retry rather
     /// than abandon the seat. Every *other* failure returns immediately.
-    fn start_when_settled(
-        &self,
-        pane: &PaneId,
-        kind: &str,
-        agent_args: &[String],
-        sink: &Sink,
-    ) -> Result<AgentRecord, SpawnError> {
-        let mut announced = false;
+    ///
+    /// The retry is silent. A `direnv` or `nvm` in the shell's rc file makes it fire on essentially
+    /// every launch, so a diagnostic here would be printed on the success path almost always —
+    /// which is not a warning but a progress indicator, and under `--json` an object every caller
+    /// skips. What a caller needs is the case where retrying did not help, and
+    /// [`SpawnError::PaneNeverSettled`] carries that with the budget it exhausted.
+    fn start_when_settled(&self, pane: &PaneId, kind: &str, agent_args: &[String]) -> Result<AgentRecord, SpawnError> {
         for delay in backoff(self.settle_timeout) {
             match agent::start(&self.name, kind, pane, agent_args) {
                 Ok(agent) => return Ok(agent),
-                Err(error) if error.code() == Some("agent_pane_busy") => {
-                    if !announced {
-                        sink.warn(&format!("pane {pane} is not an available shell yet; retrying"));
-                        announced = true;
-                    }
-                    std::thread::sleep(delay);
-                }
+                Err(error) if error.code() == Some("agent_pane_busy") => std::thread::sleep(delay),
                 Err(error) => return Err(SpawnError::Herdr(error)),
             }
         }
