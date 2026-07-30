@@ -1,6 +1,6 @@
 //! `herdr-agent-tools` — launch and prompt herdr agents from one command.
 //!
-//! Parses and dispatches; no command logic lives here. There is no `cli` module: with three
+//! Parses and dispatches; no command logic lives here. There is no `cli` module: even at five
 //! commands the dispatch match is a handful of lines, and a file holding only module declarations
 //! plus that match would name no boundary.
 
@@ -14,7 +14,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
-use crate::cmd::{AsExitStatus, Cmd, ExitStatus, Failure, KillArgs, PresetsArgs, PromptArgs, SpawnArgs};
+use crate::cmd::{AsExitStatus, Cmd, ExitStatus, Failure, KillArgs, PresetsArgs, PrimeArgs, PromptArgs, SpawnArgs};
 use crate::core::{OutputMode, Sink};
 
 // =====================================================================================================================
@@ -59,6 +59,7 @@ enum Command {
     Prompt(PromptArgs),
     Kill(KillArgs),
     Presets(PresetsArgs),
+    Prime(PrimeArgs),
 }
 
 // =====================================================================================================================
@@ -77,6 +78,7 @@ fn main() -> ExitCode {
         Command::Prompt(args) => run(args, &sink),
         Command::Kill(args) => run(args, &sink),
         Command::Presets(args) => run(args, &sink),
+        Command::Prime(args) => run(args, &sink),
     }
 }
 

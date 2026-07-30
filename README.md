@@ -14,6 +14,7 @@ on stdin.
 | `prompt` | Deliver a prompt to an agent that already exists |
 | `kill` | Close an agent's pane, refusing one that is mid-task |
 | `presets` | List what the preset config holds |
+| `prime` | Print an agent-facing brief on driving this CLI |
 
 ```
 herdr-agent-tools spawn reviewer --placement tab --preset opus --prompt "Review the branch"
@@ -84,5 +85,3 @@ Each of these is a decision to defer, not an oversight.
 - **Ending an agent while keeping its pane** — `kill` closes the pane, so the seat goes with the
   agent. Reusing a warm seat would skip the slowest part of a launch, but every route to it means
   either reporting state to herdr on a harness's behalf or sending harness-specific keys.
-- **A conventions block** — so an agent driving this CLI picks the conventions up without being
-  told them in every prompt.
