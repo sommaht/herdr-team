@@ -127,6 +127,28 @@ pub fn workspace_of(pane: &str) -> Result<String, HerdrError> {
     Ok(info.pane.workspace_id)
 }
 
+/// Runs one command line in a pane's shell, as if a person had typed it there.
+///
+/// This is what places a worktree spawn's agent in a subdirectory: `agent start` launches the agent
+/// *through* the pane's shell — it appears in the pane as a typed command line — so the shell's
+/// directory at launch is the agent's directory. One call, and no pane is split, moved, or closed.
+///
+/// The one place in this crate where a path stops being an argument and becomes syntax, which is why
+/// the quoting lives here beside the call: see [`shell_quote`] and the `External effects` section of
+/// the style guide.
+///
+/// # Errors
+///
+/// Returns whatever [`run`] returned. Note what a success does *not* mean: herdr types the text and
+/// presses Enter without checking that the shell has reached its prompt, so text sent too early is
+/// lost outright. The caller confirms the outcome with [`foreground_cwd`] rather than assuming this
+/// landed.
+pub fn open_at(pane: &PaneId, directory: &str) -> Result<(), HerdrError> {
+    // herdr answers `{"type":"ok"}`. That the text was sent is the whole result.
+    run::<IgnoredAny>(&run_args(pane, directory))?;
+    Ok(())
+}
+
 /// Closes a pane, taking whatever was running in it.
 ///
 /// The target is a `&str` rather than a [`PaneId`], unlike the three above: theirs come from the
@@ -283,6 +305,33 @@ fn worktree_args(label: &str, source: &str, branch: Option<&str>, base: Option<&
 /// `herdr pane get <PANE>`.
 fn get_args(pane: &str) -> Vec<String> {
     ["pane", "get", pane].map(str::to_owned).to_vec()
+}
+
+/// `herdr pane run <PANE> "cd -- '<DIRECTORY>'"`.
+///
+/// The command line is one argv element because herdr joins everything after the pane id with a
+/// space before typing it — three elements here would arrive as the same one string, and building it
+/// as one is what makes the vector say what herdr will see.
+fn run_args(pane: &str, directory: &str) -> Vec<String> {
+    vec![
+        "pane".to_owned(),
+        "run".to_owned(),
+        pane.to_owned(),
+        format!("cd -- {}", shell_quote(directory)),
+    ]
+}
+
+/// A path as one shell word: single-quoted, with an embedded `'` closed, escaped, and reopened.
+///
+/// Single quotes are the strong form — inside them a shell expands nothing, so `$HOME`, a backtick
+/// and a `;` are literal characters and a path holding a command separator is inert rather than
+/// executed. The one thing a single-quoted string cannot hold is a single quote, which is why one is
+/// spelled `'\''`: close, escape, reopen.
+///
+/// Quoting alone does not cover a path that opens with a dash, which a shell would read as a flag.
+/// [`run_args`] covers that by giving `cd` a `--` separator.
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', r"'\''"))
 }
 
 /// `herdr pane close <PANE>`.
@@ -515,6 +564,38 @@ mod tests {
         // No flags exist on herdr's side: `pane close` takes a pane id and acts. Every guard in front
         // of it is this crate's.
         assert_eq!(close_args("w4:p17"), ["pane", "close", "w4:p17"]);
+    }
+
+    #[test]
+    fn a_directory_change_is_typed_into_the_pane_as_one_quoted_shell_word() {
+        // The command line is one argv element: herdr joins everything after the pane id with a
+        // space before typing it, so splitting it here would only be rejoined.
+        assert_eq!(
+            run_args("w9:p1", "/work/trees/repo-8e01/src"),
+            ["pane", "run", "w9:p1", "cd -- '/work/trees/repo-8e01/src'"]
+        );
+    }
+
+    /// The quoting is a wire form: it is what another program parses, so it is pinned by exact string.
+    ///
+    /// `--cwd` is caller-supplied and the callers are agents, so the hostile cases are the point. Inside
+    /// single quotes a shell expands nothing, which makes `$HOME`, a backtick and a `;` literal
+    /// characters; the one thing a single-quoted string cannot hold is a single quote, which is why one
+    /// is spelled `'\''`. `cd --` is what keeps a leading dash a path rather than a flag.
+    #[test]
+    fn a_path_that_could_be_read_as_shell_syntax_is_inert_inside_its_quotes() {
+        assert_eq!(shell_quote("/work/repo/src"), "'/work/repo/src'");
+        assert_eq!(shell_quote("/work/don't/stop"), r"'/work/don'\''t/stop'");
+        assert_eq!(shell_quote("/work/a; rm -rf ~"), "'/work/a; rm -rf ~'");
+        assert_eq!(shell_quote("/work/$HOME/`id`"), "'/work/$HOME/`id`'");
+        assert_eq!(shell_quote("--rf"), "'--rf'");
+
+        // The separator is what covers the leading dash, since the quotes alone do not.
+        assert_eq!(
+            run_args("w9:p1", "-rf").last().unwrap(),
+            "cd -- '-rf'",
+            "a path opening with a dash is a path"
+        );
     }
 
     #[test]
