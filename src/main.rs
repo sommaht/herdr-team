@@ -7,6 +7,7 @@
 mod cmd;
 mod config;
 mod core;
+mod harness;
 mod herdr;
 
 use std::process::ExitCode;

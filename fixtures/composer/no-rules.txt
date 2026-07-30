@@ -1,0 +1,4 @@
+error: could not compile `probe`
+
+warning: build failed, waiting for other jobs
+$ 
