@@ -1,6 +1,6 @@
 //! `spawn` — create a surface and start a preset-configured agent in it.
 //!
-//! The longest file here because it is the longest command: five ordered steps across three
+//! The longest file here because it is the longest command: five ordered steps across four
 //! placements, each of which can fail after the previous one has already changed something in herdr.
 //! It reads as one transaction, so splitting it would hide that ordering and it stays one file.
 //!
@@ -22,7 +22,7 @@ use crate::cmd::{AsExitStatus, Cmd, ExitStatus};
 use crate::config::{ConfigError, Presets};
 use crate::core::{AgentName, Backoff, NonEmptyText, PaneId, Sink};
 use crate::herdr::agent::{self, AgentRecord, WORKING, Wait};
-use crate::herdr::surface::{self, Focus, Placement};
+use crate::herdr::surface::{self, Checkout, Focus, Placement};
 use crate::herdr::{HerdrError, HerdrRef};
 
 // =====================================================================================================================
@@ -53,7 +53,8 @@ const DEFAULT_SETTLE_MS: u64 = 10_000;
     herdr-agent-tools spawn reviewer --placement tab --preset opus\n  \
     herdr-agent-tools spawn fixer --preset sonnet --prompt \"Fix the flaky tests\"\n  \
     git diff | herdr-agent-tools spawn reviewer --prompt -\n  \
-    herdr-agent-tools spawn big --placement workspace --preset fable -- --resume")]
+    herdr-agent-tools spawn big --placement workspace --preset fable -- --resume\n  \
+    herdr-agent-tools spawn fixer --placement worktree --branch worktree/flake-fix")]
 pub struct SpawnArgs {
     /// The agent's name; must satisfy herdr's rule, which is checked before anything is created.
     name: AgentName,
@@ -68,6 +69,14 @@ pub struct SpawnArgs {
     #[arg(long, value_enum, default_value = "pane")]
     placement: Placement,
 
+    /// The branch a `--placement worktree` spawn checks out; herdr generates one when unset.
+    #[arg(long, value_name = "NAME")]
+    branch: Option<String>,
+
+    /// The ref that branch starts from; herdr uses `HEAD` when unset.
+    #[arg(long, value_name = "REF")]
+    base: Option<String>,
+
     /// The preset to start; defaults to the config file's `default`.
     #[arg(long, value_name = "NAME")]
     preset: Option<String>,
@@ -80,7 +89,8 @@ pub struct SpawnArgs {
     #[arg(long, value_name = "TEXT")]
     prompt: Option<MaybeStdin<NonEmptyText>>,
 
-    /// The new surface's working directory; defaults to the current one.
+    /// The directory this agent works on, or for a worktree the checkout it is cut from; defaults
+    /// to the current one.
     #[arg(long, value_name = "PATH")]
     cwd: Option<PathBuf>,
 
@@ -133,6 +143,77 @@ impl SpawnArgs {
     fn focus(&self) -> Focus {
         if self.focus { Focus::Take } else { Focus::Leave }
     }
+
+    /// Refuses `--branch` or `--base` under a placement with no worktree to apply them to.
+    ///
+    /// clap cannot express this: `conflicts_with` takes an argument id, not a value predicate, so
+    /// "valid only when `--placement` is `worktree`" has nowhere to live but a pre-check. It runs
+    /// among the others, before anything exists, which is what keeps it a pre-check.
+    ///
+    /// Ignoring the flag was the alternative and is worse. A caller templating `--branch` into
+    /// every spawn would never learn that the isolation it asked for did not happen — and a wrong
+    /// answer nobody is told about is the failure this whole tool is shaped to avoid.
+    ///
+    /// # Errors
+    ///
+    /// [`SpawnError::WorktreeOnlyFlag`], naming the flag and the placement that would honor it.
+    fn check_worktree_flags(&self) -> Result<(), SpawnError> {
+        if self.placement == Placement::Worktree {
+            return Ok(());
+        }
+        for (flag, value) in [("--branch", &self.branch), ("--base", &self.base)] {
+            if value.is_some() {
+                return Err(SpawnError::WorktreeOnlyFlag { flag });
+            }
+        }
+        Ok(())
+    }
+
+    /// Makes the surface this placement calls for, and reports the checkout when it made one.
+    ///
+    /// Named rather than inlined into [`execute`](Cmd::execute) because it is the one step with a
+    /// shape of its own: four placements, one of which produces a second thing worth reporting.
+    /// `execute` keeps the ordering the transaction depends on, and this keeps the branching, so
+    /// neither has to be read for the other's sake.
+    ///
+    /// `anchor` is resolved by the caller because it is a *pre-check* — a `--placement pane` with
+    /// no calling pane has to fail before this runs, not inside it.
+    ///
+    /// # Errors
+    ///
+    /// [`SpawnError::Herdr`] if herdr refused to make the surface, or [`SpawnError::MissingAnchor`]
+    /// for the split that arrived without one.
+    fn create_surface(
+        &self,
+        anchor: Option<PaneId>,
+        cwd: &str,
+        sink: &Sink,
+    ) -> Result<(PaneId, Option<Checkout>), SpawnError> {
+        // Only the worktree arm has a second thing to report. `--cwd` means the source checkout
+        // there rather than the pane's own directory, and no workspace is pinned: a worktree brings
+        // its own, and herdr resolves the source from the path instead.
+        match (self.placement, anchor) {
+            (Placement::Pane, Some(anchor)) => Ok((surface::split(&anchor, cwd, self.focus())?, None)),
+            (Placement::Tab, _) => {
+                let workspace = self.workspace(sink)?;
+                let pane = surface::create_tab(workspace.as_deref(), &self.name, cwd, self.focus())?;
+                Ok((pane, None))
+            }
+            (Placement::Workspace, _) => Ok((surface::create_workspace(&self.name, cwd, self.focus())?, None)),
+            (Placement::Worktree, _) => {
+                let (pane, checkout) = surface::create_worktree(
+                    &self.name,
+                    cwd,
+                    self.branch.as_deref(),
+                    self.base.as_deref(),
+                    self.focus(),
+                )?;
+                Ok((pane, Some(checkout)))
+            }
+            // Unreachable: the caller resolves `anchor` to `Some` for exactly `Placement::Pane`.
+            (Placement::Pane, None) => Err(SpawnError::MissingAnchor),
+        }
+    }
 }
 
 impl Cmd for SpawnArgs {
@@ -142,9 +223,10 @@ impl Cmd for SpawnArgs {
     /// Pre-checks, preset, surface, agent, first prompt — in that order, because a pre-check that
     /// runs after a surface exists is not a pre-check.
     fn execute(self, sink: &Sink) -> Result<Self::Ok, Self::Err> {
+        self.check_worktree_flags()?;
         let anchor = match self.placement {
             Placement::Pane => Some(anchor(std::env::var(PANE_VARIABLE).ok().as_deref())?),
-            Placement::Tab | Placement::Workspace => None,
+            Placement::Tab | Placement::Workspace | Placement::Worktree => None,
         };
 
         let presets = Presets::load(self.config.as_deref())?;
@@ -160,20 +242,11 @@ impl Cmd for SpawnArgs {
         let cwd = cwd.to_string_lossy().into_owned();
 
         // Everything above is read-only, so nothing exists yet if any of it failed.
-        let pane = match (self.placement, anchor) {
-            (Placement::Pane, Some(anchor)) => surface::split(&anchor, &cwd, self.focus())?,
-            (Placement::Tab, _) => {
-                let workspace = self.workspace(sink)?;
-                surface::create_tab(workspace.as_deref(), &self.name, &cwd, self.focus())?
-            }
-            (Placement::Workspace, _) => surface::create_workspace(&self.name, &cwd, self.focus())?,
-            // Unreachable: `anchor` is `Some` for exactly `Placement::Pane`, three lines above.
-            (Placement::Pane, None) => return Err(SpawnError::MissingAnchor),
-        };
+        let (pane, worktree) = self.create_surface(anchor, &cwd, sink)?;
 
         // From here on a failure leaves the pane open and names it: whatever went wrong is on
         // screen in it, and closing it would throw the error away with it.
-        self.start_and_prompt(&pane, &kind, &agent_args, sink)
+        self.start_and_prompt(&pane, &kind, &agent_args, worktree, sink)
             .map_err(|error| error.note_open_pane(&pane))
     }
 }
@@ -186,6 +259,7 @@ impl SpawnArgs {
         pane: &PaneId,
         kind: &str,
         agent_args: &[String],
+        worktree: Option<Checkout>,
         sink: &Sink,
     ) -> Result<Spawned, SpawnError> {
         let started = self.start_when_settled(pane, kind, agent_args)?;
@@ -194,6 +268,7 @@ impl SpawnArgs {
             return Ok(Spawned {
                 placement: self.placement,
                 delivered: None,
+                worktree,
                 agent: started,
             });
         };
@@ -208,6 +283,7 @@ impl SpawnArgs {
         Ok(Spawned {
             placement: self.placement,
             delivered: Some(started.status() != WORKING),
+            worktree,
             agent,
         })
     }
@@ -251,11 +327,18 @@ impl SpawnArgs {
 /// What `spawn` produced.
 #[derive(Debug, Serialize)]
 pub struct Spawned {
-    /// Which of the three surfaces was created.
+    /// Which of the four surfaces was created.
     placement: Placement,
     /// Whether the first prompt's delivery was proven; absent when no prompt was given.
     #[serde(skip_serializing_if = "Option::is_none")]
     delivered: Option<bool>,
+    /// The checkout a `--placement worktree` spawn landed on; absent for the other three.
+    ///
+    /// Reported because the branch is usually herdr's to generate, which makes the response that
+    /// created it the one cheap moment it is knowable. Without this a caller runs `worktree list`
+    /// against the source repo and then guesses which checkout is the one it just made.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    worktree: Option<Checkout>,
     /// herdr's agent record, nested verbatim.
     agent: AgentRecord,
 }
@@ -268,7 +351,13 @@ impl Display for Spawned {
             self.agent.name_or_unknown(),
             self.agent.kind().unwrap_or("unknown"),
             self.agent.pane()
-        )
+        )?;
+        // The branch, not the path: the path is long enough to bury the line, and the JSON carries
+        // both for anyone who needs to `cd` there.
+        if let Some(branch) = self.worktree.as_ref().and_then(|checkout| checkout.branch.as_deref()) {
+            write!(f, " [{branch}]")?;
+        }
+        Ok(())
     }
 }
 
@@ -280,8 +369,17 @@ impl Display for Spawned {
 #[derive(Debug, Error)]
 pub enum SpawnError {
     /// `--placement pane` with no `HERDR_PANE_ID`.
-    #[error("--placement pane needs a calling herdr pane and HERDR_PANE_ID is unset; use --placement tab or workspace")]
+    #[error(
+        "--placement pane needs a calling herdr pane and HERDR_PANE_ID is unset; \
+         use --placement tab, workspace, or worktree"
+    )]
     MissingAnchor,
+    /// `--branch` or `--base` under a placement that makes no worktree.
+    #[error("{flag} needs --placement worktree")]
+    WorktreeOnlyFlag {
+        /// The flag that cannot be honored here.
+        flag: &'static str,
+    },
     /// The preset file could not be read, or did not hold the named preset.
     #[error(transparent)]
     Config(#[from] ConfigError),
@@ -329,7 +427,7 @@ impl SpawnError {
 impl AsExitStatus for SpawnError {
     fn exit_status(&self) -> ExitStatus {
         match self {
-            Self::MissingAnchor => ExitStatus::Usage,
+            Self::MissingAnchor | Self::WorktreeOnlyFlag { .. } => ExitStatus::Usage,
             Self::Config(error) => error.exit_status_hint(),
             Self::NoWorkingDirectory(_) => ExitStatus::Failure,
             Self::Herdr(error) => error.exit_status(),
@@ -344,7 +442,11 @@ impl AsExitStatus for SpawnError {
             Self::Herdr(error) => Some(error.reference()),
             Self::Prompt(error) => error.herdr(),
             Self::AfterSurface { error, .. } => error.herdr(),
-            Self::MissingAnchor | Self::Config(_) | Self::NoWorkingDirectory(_) | Self::PaneNeverSettled { .. } => None,
+            Self::MissingAnchor
+            | Self::WorktreeOnlyFlag { .. }
+            | Self::Config(_)
+            | Self::NoWorkingDirectory(_)
+            | Self::PaneNeverSettled { .. } => None,
         }
     }
 }
@@ -403,7 +505,7 @@ mod tests {
 
         let rendered = error.to_string();
         assert!(
-            ["pane", "tab", "workspace"]
+            ["pane", "tab", "workspace", "worktree"]
                 .iter()
                 .all(|value| rendered.contains(value)),
             "got {rendered}"
@@ -422,6 +524,10 @@ mod tests {
         assert_eq!(
             parse(&["spawn", "reviewer", "--placement", "workspace"]).placement,
             Placement::Workspace
+        );
+        assert_eq!(
+            parse(&["spawn", "reviewer", "--placement", "worktree"]).placement,
+            Placement::Worktree
         );
     }
 
@@ -448,10 +554,54 @@ mod tests {
 
     #[test]
     fn the_usage_error_says_which_placements_work_instead() {
+        // All three that need no calling pane, worktree included: it creates its own workspace and
+        // resolves its source from `--cwd`, so it works outside a herdr session too.
         assert_eq!(
             anchor(None).unwrap_err().to_string(),
-            "--placement pane needs a calling herdr pane and HERDR_PANE_ID is unset; use --placement tab or workspace"
+            "--placement pane needs a calling herdr pane and HERDR_PANE_ID is unset; \
+             use --placement tab, workspace, or worktree"
         );
+    }
+
+    #[test]
+    fn branch_and_base_are_refused_under_a_placement_that_makes_no_worktree() {
+        // Not ignored. A caller templating --branch into every spawn would otherwise never learn
+        // that the isolation it asked for did not happen.
+        for placement in ["pane", "tab", "workspace"] {
+            for flag in ["--branch", "--base"] {
+                let error = parse(&["spawn", "reviewer", "--placement", placement, flag, "x"])
+                    .check_worktree_flags()
+                    .unwrap_err();
+
+                assert_eq!(error.to_string(), format!("{flag} needs --placement worktree"));
+                assert_eq!(error.exit_status(), ExitStatus::Usage);
+            }
+        }
+    }
+
+    #[test]
+    fn branch_and_base_are_accepted_under_worktree_placement_and_optional_there() {
+        let both = parse(&[
+            "spawn",
+            "reviewer",
+            "--placement",
+            "worktree",
+            "--branch",
+            "worktree/flake-fix",
+            "--base",
+            "origin/main",
+        ]);
+
+        assert!(both.check_worktree_flags().is_ok());
+        assert_eq!(both.branch.as_deref(), Some("worktree/flake-fix"));
+        assert_eq!(both.base.as_deref(), Some("origin/main"));
+
+        // Neither is required: herdr generates a branch and bases on HEAD, and this crate states
+        // no default of its own.
+        let neither = parse(&["spawn", "reviewer", "--placement", "worktree"]);
+        assert!(neither.check_worktree_flags().is_ok());
+        assert_eq!(neither.branch, None);
+        assert_eq!(neither.base, None);
     }
 
     #[test]
@@ -484,6 +634,7 @@ mod tests {
         let spawned = Spawned {
             placement: Placement::Tab,
             delivered: Some(true),
+            worktree: None,
             agent: record(),
         };
 
@@ -499,6 +650,7 @@ mod tests {
         let spawned = Spawned {
             placement: Placement::Pane,
             delivered: None,
+            worktree: None,
             agent: record(),
         };
 
@@ -506,6 +658,50 @@ mod tests {
             serde_json::to_string(&spawned).unwrap(),
             r#"{"placement":"pane","agent":{"agent":"claude","agent_status":"working","pane_id":"w4:p17","name":"reviewer"}}"#
         );
+    }
+
+    /// A worktree spawn reports the checkout, because nothing else will.
+    ///
+    /// The branch is herdr's to generate unless the caller named one, so this response is the one
+    /// cheap moment it is knowable. Human mode shows the branch alone — the path is long enough to
+    /// bury the line — and the JSON carries both.
+    #[test]
+    fn a_worktree_spawn_reports_the_branch_it_landed_on_and_the_path_beside_it() {
+        let spawned = Spawned {
+            placement: Placement::Worktree,
+            delivered: None,
+            worktree: Some(Checkout {
+                branch: Some("worktree/lucky-harbor-8e01".to_owned()),
+                path: "/work/trees/repo/worktree-lucky-harbor-8e01".to_owned(),
+            }),
+            agent: record(),
+        };
+
+        assert_eq!(
+            spawned.to_string(),
+            "reviewer (claude) → w4:p17 [worktree/lucky-harbor-8e01]"
+        );
+        assert_eq!(
+            serde_json::to_string(&spawned).unwrap(),
+            r#"{"placement":"worktree","worktree":{"branch":"worktree/lucky-harbor-8e01","path":"/work/trees/repo/worktree-lucky-harbor-8e01"},"agent":{"agent":"claude","agent_status":"working","pane_id":"w4:p17","name":"reviewer"}}"#
+        );
+    }
+
+    #[test]
+    fn a_worktree_with_no_branch_falls_back_to_the_plain_line_rather_than_an_empty_bracket() {
+        // herdr's branch field is optional, so the human line has to survive a `None` it does not
+        // expect rather than printing `[]`.
+        let spawned = Spawned {
+            placement: Placement::Worktree,
+            delivered: None,
+            worktree: Some(Checkout {
+                branch: None,
+                path: "/work/trees/repo/detached".to_owned(),
+            }),
+            agent: record(),
+        };
+
+        assert_eq!(spawned.to_string(), "reviewer (claude) → w4:p17");
     }
 
     #[test]
