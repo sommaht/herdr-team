@@ -4,8 +4,6 @@
 //! Touches no process and no pane — it is handed a detection snapshot as `&str` and answers whether
 //! the composer holds text. The region rule lives here once; each kind supplies only its marker.
 
-#![allow(dead_code, reason = "wired into `prompt` in Task 10")]
-
 // =====================================================================================================================
 // Constants
 // =====================================================================================================================

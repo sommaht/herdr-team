@@ -14,7 +14,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
-use crate::cmd::{AsExitStatus, Cmd, ExitStatus, Failure, PresetsArgs};
+use crate::cmd::{AsExitStatus, Cmd, ExitStatus, Failure, PresetsArgs, PromptArgs};
 use crate::core::{OutputMode, Sink};
 
 // =====================================================================================================================
@@ -55,6 +55,7 @@ struct Cli {
 /// its `*Args` struct, next to the flags it documents.
 #[derive(Debug, Subcommand)]
 enum Command {
+    Prompt(PromptArgs),
     Presets(PresetsArgs),
 }
 
@@ -70,6 +71,7 @@ fn main() -> ExitCode {
     let sink = Sink::new(mode);
 
     match cli.command {
+        Command::Prompt(args) => run(args, &sink),
         Command::Presets(args) => run(args, &sink),
     }
 }
