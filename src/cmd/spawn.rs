@@ -10,7 +10,7 @@
 //! directly above them, and a reader following `execute` finds them where they are used.
 
 use std::fmt::Display;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clap::Args;
 use clap_stdin::MaybeStdin;
@@ -517,6 +517,23 @@ fn anchor(variable: Option<&str>) -> Result<PaneId, SpawnError> {
         .ok_or(SpawnError::MissingAnchor)
 }
 
+/// Where `cwd` sits inside `repo_root`, or `None` when there is nothing to place.
+///
+/// `None` covers two cases that want the same answer: a caller already at the repository root, which
+/// has no subdirectory to reopen at, and a `cwd` that is not inside `repo_root` at all.
+///
+/// [`Path::strip_prefix`] rather than [`str::strip_prefix`], because it compares components. The
+/// string form answers `"y/src"` for `/repo` against `/repository/src`, and it would have to be
+/// taught about a trailing separator on either side, which the path form already knows.
+fn relative_to(repo_root: &str, cwd: &str) -> Option<String> {
+    let relative = Path::new(cwd).strip_prefix(repo_root).ok()?;
+    if relative.as_os_str().is_empty() {
+        None
+    } else {
+        Some(relative.to_string_lossy().into_owned())
+    }
+}
+
 // =====================================================================================================================
 // Tests
 // =====================================================================================================================
@@ -774,6 +791,41 @@ mod tests {
             0,
             "a caller that wants no retry at all can say so"
         );
+    }
+
+    #[test]
+    fn a_caller_inside_a_project_is_placed_at_the_same_path_in_the_new_checkout() {
+        assert_eq!(relative_to("/work/repo", "/work/repo/src").as_deref(), Some("src"));
+        assert_eq!(
+            relative_to("/work/repo", "/work/repo/src/api/handlers").as_deref(),
+            Some("src/api/handlers")
+        );
+    }
+
+    #[test]
+    fn a_caller_at_the_repository_root_has_nothing_to_place_and_skips_the_step() {
+        // Not an empty string that a later `cd` would run as a no-op: the pane already opens at the
+        // checkout root, so there is nothing for the placement step to do.
+        assert_eq!(relative_to("/work/repo", "/work/repo"), None);
+    }
+
+    #[test]
+    fn a_trailing_separator_on_either_side_is_not_part_of_the_relative_path() {
+        assert_eq!(relative_to("/work/repo/", "/work/repo/src").as_deref(), Some("src"));
+        assert_eq!(relative_to("/work/repo", "/work/repo/src/").as_deref(), Some("src"));
+        assert_eq!(relative_to("/work/repo/", "/work/repo/"), None);
+    }
+
+    /// The reason this compares path components rather than string prefixes.
+    ///
+    /// `str::strip_prefix` would answer `"y/src"` here and send the agent somewhere that does not exist.
+    /// The second case is the caller already inside a linked worktree, whose `repo_root` is the main
+    /// checkout it is not under — herdr refuses to cut a worktree from there, and answering `None`
+    /// keeps this from computing nonsense in the moment before that refusal arrives.
+    #[test]
+    fn a_directory_that_only_looks_like_a_prefix_of_the_root_is_not_inside_it() {
+        assert_eq!(relative_to("/work/repo", "/work/repository/src"), None);
+        assert_eq!(relative_to("/work/repo", "/work/trees/repo-8e01/src"), None);
     }
 
     #[test]
