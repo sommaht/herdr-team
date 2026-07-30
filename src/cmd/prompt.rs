@@ -1,5 +1,7 @@
 //! `prompt` — deliver a prompt to an agent that already exists.
 
+mod envelope;
+
 use std::fmt::Display;
 
 use clap::Args;
