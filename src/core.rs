@@ -72,6 +72,18 @@ impl<'a> From<&'a PaneId> for Cow<'a, str> {
 #[deref(forward)]
 pub struct NonEmptyText(String);
 
+impl NonEmptyText {
+    /// Wraps text this crate composed rather than text a caller typed.
+    ///
+    /// [`FromStr`] is the check for input, and input is where an empty prompt can come from. This
+    /// is the other direction: the mail envelope's rendering always opens with a `<mail>` tag, so
+    /// its non-emptiness is structural and re-parsing it would only produce a `Result` no caller
+    /// could act on.
+    pub fn composed(text: String) -> Self {
+        Self(text)
+    }
+}
+
 impl FromStr for NonEmptyText {
     type Err = BlankTextError;
 
@@ -193,6 +205,12 @@ mod tests {
         for text in ["x", "  padded  ", "line one\nline two\n", "-", "--flag"] {
             assert_eq!(text.parse::<NonEmptyText>().unwrap().to_string(), text);
         }
+    }
+
+    #[test]
+    fn composed_text_carries_a_structural_guarantee_rather_than_a_checked_one() {
+        let text = NonEmptyText::composed("<mail from=\"worker\">\nhi\n</mail>".to_owned());
+        assert_eq!(text.to_string(), "<mail from=\"worker\">\nhi\n</mail>");
     }
 
     #[test]

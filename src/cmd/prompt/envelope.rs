@@ -253,6 +253,18 @@ mod tests {
     }
 
     #[test]
+    fn a_wrapped_message_is_always_valid_prompt_text() {
+        // `deliver` hands `wrap`'s output to the seam as `NonEmptyText` without re-parsing. That is
+        // sound because the rendering always opens with a tag, whatever the body holds.
+        let envelope = Envelope {
+            from: OPERATOR.to_owned(),
+            reply_to: None,
+        };
+
+        assert!(envelope.wrap(&body("x")).parse::<NonEmptyText>().is_ok());
+    }
+
+    #[test]
     fn a_caller_outside_a_herdr_pane_is_a_person_and_invites_no_reply() {
         assert_eq!(
             Envelope::addressed(no_pane(), &Reply::ToSender),
