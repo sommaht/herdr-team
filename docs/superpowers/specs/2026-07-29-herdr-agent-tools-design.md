@@ -437,11 +437,31 @@ section lists only the four commands above.
 its own CLI syntax** — print a command group to read it rather than guessing a flag; and never put
 prompt text or captured terminal content in an error message.
 
-**This repository references nothing outside itself.** No home-directory paths, no neighbouring
-project names, no personal configuration. The findings above are restated rather than linked, and
-the two shell functions being replaced are described by behaviour rather than by location. A grep
-for `~/`, `/Users/`, and the neighbouring project names is part of the review before this ships,
-not a good intention.
+### The external-reference rule, and what it does not cover
+
+**No shipped file references anything outside this repository.** No home-directory paths, no
+neighbouring project names, no personal configuration. That covers the spec, the style guide, the
+README, the agent instructions, and every line of code and doc comment. The findings above are
+restated rather than linked, and the two shell functions being replaced are described by behaviour
+rather than by location.
+
+It deliberately does **not** gag the working documents. An implementation plan under
+`docs/superpowers/plans/` may name the predecessor repository's path, because the agent executing
+that plan has to find the thing it is porting — the project scaffolding, the style guide, and the
+`Cmd`/`Sink`/exit-status architecture all come from there, and a plan that says "port the style
+guide" without saying from where is not executable. The predecessor's own style guide delegates its
+core Rust rules to an external skill and cites that skill's rule identifiers; those citations are
+what must not survive the port, and restating each rule inline is the work.
+
+Two gates enforce the split rather than one grep:
+
+1. **Every shipped file is written self-contained from the start.** Not scrubbed afterwards —
+   written that way, because a rule restated inline reads differently from a citation with the
+   citation deleted.
+2. **A pre-publication pass greps every committed file, plans included**, for `~/`, `/Users/`, and
+   the neighbouring project names, and scrubs what it finds. This is a task with an owner, not a
+   good intention, and it runs before the repository is made public rather than at the end of the
+   MVP.
 
 ## Open for later
 
