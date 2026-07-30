@@ -598,11 +598,19 @@ This retires the "printed conventions block" entry in "Open for later", which is
 
 ### What the amendment adds to the module map
 
-Two files, taking the map from twelve to sixteen — `src/cmd/kill.rs` and `src/cmd/prime.rs`, plus the
-two `src/harness/` files an earlier refactor added. `surface.rs` grows `close`, which makes it the
-three ways to make a pane *and the one way to take one away*; nothing else moves. Neither new command
-needed a module of its own beneath `cmd`, and `prime` deliberately reaches sideways for
-`presets::PresetList` rather than minting a second renderer of the same table.
+Three files, taking the map from twelve to seventeen — `src/cmd/kill.rs`, `src/cmd/prime.rs`, and
+`src/core/backoff.rs`, plus the two `src/harness/` files an earlier refactor added. `surface.rs` grows
+`close` and `workspace_of`, which makes it the three ways to make a pane, the one way to take one
+away, and the one question asked about one. Neither new command needed a module of its own beneath
+`cmd`, and `prime` reaches sideways for `presets::PresetList` rather than minting a second renderer of
+the same table.
+
+`core/backoff.rs` is the retry schedule, moved out of `spawn` once that file crossed RS-033's line
+count. RS-032 is what settles where it went: it forbids minting a file for a handful of lines, and
+blesses a *substantial* single-consumer module — this is forty non-test lines with thirty of tests,
+and it is a value type rather than a role carved out of one. It sits in `core` rather than nesting
+under `spawn` because it knows nothing of herdr, agents, or panes; it is `Duration` arithmetic, which
+is what `core` is for. `prompt`'s re-send is the plausible second caller, if it ever grows a delay.
 
 ## Open for later
 
