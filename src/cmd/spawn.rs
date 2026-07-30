@@ -148,6 +148,26 @@ impl SpawnArgs {
         Ok(Some(surface::workspace_of(pane.trim())?))
     }
 
+    /// The caller's own directory relative to its repository root, for a worktree spawn to reopen
+    /// at.
+    ///
+    /// One read-only herdr call, made before anything is created, and only for the placement that
+    /// has a second checkout to map into. `None` from a caller already at the repository root, which
+    /// skips the placement step rather than running a no-op `cd`.
+    ///
+    /// # Errors
+    ///
+    /// [`SpawnError::Herdr`] when herdr cannot resolve a repository for `cwd` — `not_git_worktree`
+    /// for a caller outside one. That refusal now arrives here rather than from `worktree create`,
+    /// which is where a precondition belongs: nothing has been created yet, so a rejected command
+    /// has changed nothing.
+    fn subdirectory(&self, cwd: &str) -> Result<Option<String>, SpawnError> {
+        if self.placement != Placement::Worktree {
+            return Ok(None);
+        }
+        Ok(relative_to(&surface::repo_root(cwd)?, cwd))
+    }
+
     /// Where the first prompt says a reply should go.
     ///
     /// The flags are declared here rather than flattened in from `prompt` — a shared group would put
@@ -263,27 +283,42 @@ impl Cmd for SpawnArgs {
         };
         let cwd = cwd.to_string_lossy().into_owned();
 
+        // Read before anything is created, so a caller outside a repository is refused while a
+        // refusal is still free.
+        let subdirectory = self.subdirectory(&cwd)?;
+
         // Everything above is read-only, so nothing exists yet if any of it failed.
         let (pane, worktree) = self.create_surface(anchor, &cwd, sink)?;
 
         // From here on a failure leaves the pane open and names it: whatever went wrong is on
-        // screen in it, and closing it would throw the error away with it.
-        self.start_and_prompt(&pane, &kind, &agent_args, worktree, sink)
+        // screen in it, and closing it would throw the error away with it. Every step past this
+        // point is inside one call, so that note has one owner rather than a wrapper per step.
+        self.start_and_prompt(&pane, &kind, &agent_args, worktree, subdirectory.as_deref(), sink)
             .map_err(|error| error.note_open_pane(&pane))
     }
 }
 
 impl SpawnArgs {
-    /// Starts the agent, retrying a pane whose shell has not settled, then delivers the first
-    /// prompt if there is one.
+    /// Places the pane, starts the agent, retrying one whose shell has not settled, then delivers
+    /// the first prompt if there is one.
+    ///
+    /// Everything that happens after the surface exists, which is what makes it the one place the
+    /// caller's `note_open_pane` has to wrap.
     fn start_and_prompt(
         &self,
         pane: &PaneId,
         kind: &str,
         agent_args: &[String],
         worktree: Option<Checkout>,
+        subdirectory: Option<&str>,
         sink: &Sink,
     ) -> Result<Spawned, SpawnError> {
+        // Before the agent, because `agent start` inherits the shell's directory — after it, the
+        // shell would move and the agent would not.
+        if let (Some(checkout), Some(relative)) = (&worktree, subdirectory) {
+            self.open_subdirectory(pane, &checkout.path, relative, sink)?;
+        }
+
         let started = self.start_when_settled(pane, kind, agent_args)?;
 
         let Some(text) = &self.prompt else {
@@ -352,6 +387,45 @@ impl SpawnArgs {
             }),
             Err(error) => Err(SpawnError::Herdr(error)),
         }
+    }
+
+    /// Opens the new checkout's pane at the caller's own subdirectory, before the agent starts in
+    /// it.
+    ///
+    /// `agent start` launches the agent *through* the pane's shell, so the shell's directory at
+    /// launch is the agent's directory — which is what makes one [`surface::open_at`] enough, with
+    /// no pane split, moved, or closed.
+    ///
+    /// Never a refusal. Both ways of missing the subdirectory warn and return `Ok`, for the reason
+    /// [`Unplaced`] records.
+    ///
+    /// # Errors
+    ///
+    /// [`SpawnError::Herdr`] if herdr refused the `pane run` or the `pane get` outright — a
+    /// transport failure rather than a shell that has not caught up.
+    fn open_subdirectory(&self, pane: &PaneId, checkout: &str, relative: &str, sink: &Sink) -> Result<(), SpawnError> {
+        let Some(target) = target_in(checkout, relative) else {
+            sink.warn(&Unplaced::Absent.warning(relative));
+            return Ok(());
+        };
+        let target = target.to_string_lossy().into_owned();
+
+        // The same budget and schedule `agent start` retries on, and for the same cause: a shell
+        // running a directory-environment hook is not at its prompt yet, and `pane run` types into
+        // it regardless — so text sent too early is lost outright rather than queued. Re-sent each
+        // round rather than polled, because a lost `cd` is never going to arrive on its own.
+        for delay in Backoff::within(self.settle_timeout) {
+            if arrived(pane, &target)? {
+                return Ok(());
+            }
+            std::thread::sleep(delay);
+        }
+
+        // One last attempt after the budget is spent, so a zero settle timeout still tries once.
+        if !arrived(pane, &target)? {
+            sink.warn(&Unplaced::NeverArrived.warning(relative));
+        }
+        Ok(())
     }
 }
 
@@ -575,6 +649,20 @@ fn relative_to(repo_root: &str, cwd: &str) -> Option<String> {
 fn target_in(checkout: &str, relative: &str) -> Option<PathBuf> {
     let target = Path::new(checkout).join(relative);
     target.is_dir().then_some(target)
+}
+
+/// Sends the directory change, then asks the pane where its shell actually ended up.
+///
+/// Testing the outcome rather than assuming the command landed is the whole point: `pane run`
+/// succeeds whether the text reached a live prompt or a shell that had not started, and only
+/// [`surface::foreground_cwd`] can tell those apart.
+///
+/// # Errors
+///
+/// Whatever either herdr call returned.
+fn arrived(pane: &PaneId, target: &str) -> Result<bool, HerdrError> {
+    surface::open_at(pane, target)?;
+    Ok(surface::foreground_cwd(pane)?.as_deref() == Some(target))
 }
 
 // =====================================================================================================================
@@ -869,6 +957,20 @@ mod tests {
     fn a_directory_that_only_looks_like_a_prefix_of_the_root_is_not_inside_it() {
         assert_eq!(relative_to("/work/repo", "/work/repository/src"), None);
         assert_eq!(relative_to("/work/repo", "/work/trees/repo-8e01/src"), None);
+    }
+
+    /// Three of the four placements answer without asking herdr anything.
+    ///
+    /// That is what makes this testable at all — no automated test in this crate invokes herdr, so a
+    /// version that called out for every placement would have nothing to assert here. The worktree arm
+    /// is the one this cannot cover, and it is covered by the live rehearsal instead.
+    #[test]
+    fn only_a_worktree_spawn_asks_where_the_caller_sits_in_its_repository() {
+        for placement in ["pane", "tab", "workspace"] {
+            let args = parse(&["spawn", "reviewer", "--placement", placement]);
+
+            assert_eq!(args.subdirectory("/work/repo/src").unwrap(), None, "{placement}");
+        }
     }
 
     #[test]
