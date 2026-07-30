@@ -130,6 +130,14 @@ impl AgentRecord {
     pub fn name_or_unknown(&self) -> &str {
         self.name.as_deref().unwrap_or("(unnamed)")
     }
+
+    /// The agent's name as herdr recorded it, absent for a pane herdr did not name.
+    ///
+    /// The raw option, for a caller whose fallback is not the human-readable placeholder —
+    /// the envelope falls back to the pane id, which is an address rather than a label.
+    pub fn name(&self) -> Option<&str> {
+        self.name.as_deref()
+    }
 }
 
 /// `agent get`'s result.
@@ -352,6 +360,19 @@ mod tests {
             r#"{"agent":"claude","agent_status":"idle","pane_id":"w4:p2"}"#,
             "herdr omitted the field, so it stays omitted"
         );
+    }
+
+    #[test]
+    fn a_record_reports_its_raw_name_so_a_caller_can_choose_its_own_fallback() {
+        let named: AgentRecord =
+            serde_json::from_str(r#"{"agent":"claude","agent_status":"idle","pane_id":"w4:p2","name":"reviewer"}"#)
+                .unwrap();
+        assert_eq!(named.name(), Some("reviewer"));
+
+        let unnamed: AgentRecord =
+            serde_json::from_str(r#"{"agent":"claude","agent_status":"idle","pane_id":"w4:p2"}"#).unwrap();
+        assert_eq!(unnamed.name(), None);
+        assert_eq!(unnamed.name_or_unknown(), "(unnamed)");
     }
 
     #[test]
