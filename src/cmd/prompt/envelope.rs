@@ -34,6 +34,23 @@ pub enum Reply {
     None,
 }
 
+impl Reply {
+    /// The decision the `--no-reply` / `--reply-to` pair encodes, wherever the pair is declared.
+    ///
+    /// The two flags are declared separately on `prompt` and on `spawn`, because those structs are
+    /// clap parsers first and a flattened group would put both commands' flags in one help section.
+    /// What the pair *means* has one owner all the same, so the two commands cannot drift on it.
+    ///
+    /// The flags conflict at parse time, so the order these arms are read in cannot matter.
+    pub fn from_flags(reply_to: Option<&str>, no_reply: bool) -> Self {
+        match (reply_to, no_reply) {
+            (Some(target), _) => Self::To(target.to_owned()),
+            (None, true) => Self::None,
+            (None, false) => Self::ToSender,
+        }
+    }
+}
+
 // =====================================================================================================================
 // Envelope
 // =====================================================================================================================
@@ -136,10 +153,7 @@ fn no_pane() -> (String, Option<String>) {
 /// wrong fails loudly in the replier's hands, where a missing one kills the loop in silence.
 fn from_pane(pane: &str, answer: Result<AgentRecord, HerdrError>, sink: &Sink) -> (String, Option<String>) {
     match answer {
-        Ok(record) => (
-            record.name().unwrap_or(pane).to_owned(),
-            Some(pane.to_owned()),
-        ),
+        Ok(record) => (record.name().unwrap_or(pane).to_owned(), Some(pane.to_owned())),
         Err(error) if error.is_not_found() => (OPERATOR.to_owned(), None),
         Err(_) => {
             // herdr's own message is not restated here, and no prompt text exists at this point to
@@ -249,7 +263,11 @@ mod tests {
             reply_to: None,
         };
 
-        assert!(envelope.wrap(&body("line one\nline two")).contains("line one\nline two"));
+        assert!(
+            envelope
+                .wrap(&body("line one\nline two"))
+                .contains("line one\nline two")
+        );
     }
 
     #[test]
@@ -268,7 +286,10 @@ mod tests {
     fn a_caller_outside_a_herdr_pane_is_a_person_and_invites_no_reply() {
         assert_eq!(
             Envelope::addressed(no_pane(), &Reply::ToSender),
-            Envelope { from: OPERATOR.to_owned(), reply_to: None }
+            Envelope {
+                from: OPERATOR.to_owned(),
+                reply_to: None
+            }
         );
     }
 
@@ -291,7 +312,10 @@ mod tests {
 
         assert_eq!(
             Envelope::addressed(resolved, &Reply::None),
-            Envelope { from: "dispatcher".to_owned(), reply_to: None }
+            Envelope {
+                from: "dispatcher".to_owned(),
+                reply_to: None
+            }
         );
     }
 
@@ -301,10 +325,9 @@ mod tests {
 
     #[test]
     fn a_named_agent_is_identified_by_its_name_and_addressed_by_its_pane() {
-        let record = serde_json::from_str(
-            r#"{"agent":"claude","agent_status":"idle","pane_id":"w4:p3","name":"dispatcher"}"#,
-        )
-        .unwrap();
+        let record =
+            serde_json::from_str(r#"{"agent":"claude","agent_status":"idle","pane_id":"w4:p3","name":"dispatcher"}"#)
+                .unwrap();
 
         assert_eq!(
             from_pane("w4:p3", Ok(record), &Sink::new(OutputMode::Human)),
@@ -314,8 +337,7 @@ mod tests {
 
     #[test]
     fn an_agent_herdr_did_not_name_falls_back_to_its_pane_id_rather_than_omitting_from() {
-        let record =
-            serde_json::from_str(r#"{"agent":"claude","agent_status":"idle","pane_id":"w4:p9"}"#).unwrap();
+        let record = serde_json::from_str(r#"{"agent":"claude","agent_status":"idle","pane_id":"w4:p9"}"#).unwrap();
 
         assert_eq!(
             from_pane("w4:p9", Ok(record), &Sink::new(OutputMode::Human)),
