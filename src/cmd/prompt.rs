@@ -41,6 +41,12 @@ pub struct PromptArgs {
     target: String,
 
     /// The prompt text; `-` reads it from stdin (e.g. a heredoc or a pipe).
+    // `allow_hyphen_values` is not in the doc comment because a caller has nothing to do about it.
+    // Without it a prompt that opens with `--` is tokenized as a flag, and clap's rejection repeats
+    // the would-be prompt back — which the prompt-redaction rule forbids outright. `--` is a repair
+    // only here; `spawn --prompt` has no separator to spare, so the fix has to be the same one on
+    // both inputs.
+    #[arg(allow_hyphen_values = true)]
     text: MaybeStdin<NonEmptyText>,
 
     /// Wait for these states instead of `working`; repeat for more than one.
@@ -297,6 +303,38 @@ mod tests {
     fn the_guard_runs_unless_force_says_otherwise() {
         assert!(parse(&["prompt", "reviewer", "go"]).guarded());
         assert!(!parse(&["prompt", "reviewer", "go", "--force"]).guarded());
+    }
+
+    /// A prompt that opens with a dash is delivered rather than rejected.
+    ///
+    /// The parse is the redaction. A value clap accepts is a value no clap diagnostic can repeat,
+    /// and repeating it is what the prompt rule forbids — so this test is the leak test too.
+    #[test]
+    fn a_prompt_that_opens_with_a_dash_is_prompt_text_rather_than_a_flag() {
+        for text in ["--force the issue", "-e", "--not-a-flag-here", "-- leading separator"] {
+            assert_eq!(parse(&["prompt", "reviewer", text]).text.to_string(), text, "{text}");
+        }
+
+        // The two limits, both of them clap's and neither of them a leak. A token that *exactly*
+        // matches a declared flag is still that flag, and a bare `--` is still the value terminator.
+        // Both are repaired the same way, and the repair is what `--` is for: everything after it is
+        // the prompt.
+        assert_eq!(
+            parse(&["prompt", "reviewer", "--", "--force"]).text.to_string(),
+            "--force"
+        );
+        assert_eq!(parse(&["prompt", "reviewer", "--", "--"]).text.to_string(), "--");
+    }
+
+    #[test]
+    fn a_flag_after_the_prompt_is_still_a_flag() {
+        // The other half of `allow_hyphen_values`: it must claim the prompt's own value and nothing
+        // past it, or every flag on this command stops working.
+        let args = parse(&["prompt", "reviewer", "--go", "--wait-until", "idle", "--force"]);
+
+        assert_eq!(args.text.to_string(), "--go");
+        assert_eq!(args.wait_until, ["idle"]);
+        assert!(!args.guarded());
     }
 
     #[test]

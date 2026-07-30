@@ -62,7 +62,9 @@ Lightweight sub-headers are earned, not automatic.
   would mark.
 - **`main`** — parses and dispatches. No command logic. `cli` is not a module of its own: with
   three commands the dispatch match is a handful of lines, and a file holding only module
-  declarations plus that match names no boundary.
+  declarations plus that match names no boundary. What it does own beyond dispatch is the
+  **argument failure** — clap's rejection restated in this crate's own words, so it renders
+  through the sink like every other failure and repeats nothing the caller typed.
 
 There is **no prelude**. It earns its keep when a dozen command modules share one import set;
 three modules state their own imports (**RS-050**).
@@ -153,6 +155,17 @@ A prompt is the argument to `agent prompt`, and the composer guard's input is a 
 someone's half-written message. Neither may reach an error message, a diagnostic, or a log.
 The guard's refusal says the composer holds unsent text and never says what that text is.
 
+**The parser is inside the rule, not outside it.** clap repeats the offending value in its own
+rejection, and for `prompt` and `spawn --prompt` that value is the prompt — so `main` parses
+with `try_parse` and rebuilds the rejection from clap's structured context. The rebuild is an
+**allowlist**: a string reaches the message only if it is a spelling this build declares, taken
+from `Cli::command()` itself. Filtering the caller's tokens instead would be a guess about what
+a prompt can look like, and a prompt is arbitrary text.
+
+Both prompt inputs also carry `allow_hyphen_values`, so text opening with `--` is delivered
+rather than rejected. That is the same rule from the other side: a value that parses is a value
+no diagnostic can repeat.
+
 ## Exit-status contract
 
 The codes are stable so a caller can branch on them without parsing stderr:
@@ -169,6 +182,12 @@ There is no `ErrorCode` enum: the exit status *is* the machine-readable classifi
 comes from the value a command returns — never from a diagnostic pushed along the way.
 `AsExitStatus for HerdrError` matches on herdr's own code and maps only the codes with a
 meaningful non-`1` answer; an unrecognized code is a general failure, not a compile error.
+
+One thing is read before that code: herdr's own process exit status, and only the value 2.
+herdr answers a bad argument the way this crate does — a plain line and no error object, so no
+code — and every argument in the vector it rejected came from a flag this crate's caller set.
+Forwarding it is what keeps a value passed straight through, such as `--wait-until`, a usage
+error rather than an operational one.
 (The `AsExitStatus` mapping itself and fix-first message wording are core rules — see the
 skill's `references/errors.md`.)
 

@@ -30,7 +30,8 @@ herdr-agent-tools presets
 
 `prompt` and `kill` each refuse one thing by default, and `--force` is the override for both: a
 composer holding someone's unsent text, and an agent still working or blocked. Neither refusal
-changes anything, and both exit 5.
+changes anything, and both exit 5. Neither clears on a timer either — a composer is cleared by the
+person typing into it — so the retry belongs after the named state changes, not on a loop.
 
 ## Presets
 
@@ -68,9 +69,23 @@ Text is the default rather than JSON because the output is usually *read*, inclu
 `spawn` prints `reviewer (claude) → w4:p9`; its JSON form nests herdr's whole agent record, which is
 what a pipeline wants and roughly twenty-five times the size for the same actionable fact.
 
+One run may print warnings before its result, so a pipeline selects rather than taking the first
+line:
+
+```
+herdr-agent-tools --json spawn worker --placement tab \
+  | jq -er 'select(.type == "result") | .agent.pane_id'
+```
+
 `prime` is the one exception: `--json` prints the same brief as no flag at all. Its result is a
-document, and wrapping prose in an envelope buys escaping and no information. Failures are still JSON
-under `--json` for every command, `prime` included.
+document, and wrapping prose in an envelope buys escaping and no information — as do `--help` and
+`--version`, which clap answers before a command is chosen. Failures are still JSON under `--json`
+for every command, `prime` included, and so are the argument errors clap would otherwise print as
+prose on stderr.
+
+An argument error names only what this build declares — the argument, the values it accepts, the
+rule it enforces — and never repeats the value that was rejected. The rejected value may be prompt
+text, and a prompt does not belong in a diagnostic.
 
 ## Exit codes
 
@@ -78,11 +93,15 @@ under `--json` for every command, `prime` included.
 | ---- | ------- |
 | 0 | success |
 | 1 | general failure |
-| 2 | usage error |
+| 2 | usage error — the arguments were wrong, whether this tool rejected them or herdr did |
 | 3 | resource not found |
-| 5 | conflict, retryable — a composer holding unsent text, a pane that is not yet an available shell |
+| 5 | conflict — a composer holding unsent text, an agent mid-task, a pane that is not yet an available shell, a name already taken |
 
 The codes are stable, so a caller can branch on them without parsing stderr.
+
+Code 5 is the one worth retrying, and only once the state its message names has changed. A pane
+whose shell is still starting clears itself; an occupied composer, a working agent, and a taken
+name do not.
 
 ## Roadmap
 

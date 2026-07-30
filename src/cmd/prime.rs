@@ -56,7 +56,8 @@ sitting at a shell prompt, so `spawn` creates the surface and starts the agent i
 A <target> is a unique agent name or a herdr pane id, resolved by herdr. Your own pane, tab, and
 workspace ids come from `herdr pane current`. Every command below is run through
 `herdr-agent-tools`, prints one terse line, and takes `--json` for when a pipeline has to parse
-the output rather than you reading it.
+the output rather than you reading it. `prime` is the one exception: its brief is a document, so
+`--json` prints this same text. Do not pipe it to a JSON parser.
 
 ## Launching agents
 
@@ -88,21 +89,23 @@ the output rather than you reading it.
 ## Reference
 
     presets                               list what the preset config holds
-    prime                                 print this brief again
+    prime                                 print this brief again; text in both modes
 
 ## Two refusals you will meet
 
-Both exit 5, both leave everything unchanged, and both clear on their own. `--force` overrides
-either when you mean it.
+Both exit 5 and both leave everything unchanged. Neither clears on a timer, so wait for the
+state the message names rather than retrying on a loop. `--force` overrides either.
 
-    prompt    the target's composer holds someone's unsent text
-    kill      the target is still working or blocked
+    prompt    the composer holds someone's unsent text; a person has to send or clear it
+    kill      the target is working, or blocked and waiting on someone
 
 ## Exit codes are a protocol
 
-    5    retryable, so retry it: an occupied composer, or a pane whose shell has not started
+    5    a conflict; retry once the state the message names has changed, not on a loop. A
+         pane whose shell is still starting clears itself. An occupied composer, a working
+         agent, and a name already taken do not — read the message and act on it.
     3    what you named does not exist
-    2    the arguments were wrong
+    2    the arguments were wrong, whether this tool rejected them or herdr did
     1    something else failed
 
 ## Common workflows
@@ -122,9 +125,11 @@ Fan out, then clean up when one is done:
     done
     herdr-agent-tools kill api
 
-Collect pane ids for a script rather than for reading:
+Collect pane ids for a script rather than for reading. One run may print warning lines before
+its result, so select the result instead of taking the first line:
 
-    herdr-agent-tools --json spawn worker --placement tab | jq -r '.agent.pane_id'";
+    herdr-agent-tools --json spawn worker --placement tab \\
+      | jq -er 'select(.type == \"result\") | .agent.pane_id'";
 
 // =====================================================================================================================
 // Prime Args
@@ -134,10 +139,17 @@ Collect pane ids for a script rather than for reading:
 ///
 /// Makes no herdr call and cannot fail: a config it cannot read costs the preset table and nothing
 /// else.
+///
+/// This is the crate's one `--json` exception. The brief is a document rather than a record, so
+/// both modes print the same text — wrapping prose in a JSON envelope buys escaping and no
+/// information. Said here, in `--json`'s own help, and in the brief itself, so a consumer learns it
+/// before a parser does.
 #[derive(Debug, Args)]
 #[command(after_help = "Examples:\n  \
     herdr-agent-tools prime\n  \
-    herdr-agent-tools prime --config ./config.toml")]
+    herdr-agent-tools prime --config ./config.toml\n\
+    \n\
+    --json prints this same text: the brief is a document, not a record.")]
 pub struct PrimeArgs {
     /// Read this preset file instead of the one in the config directory.
     #[arg(long, value_name = "PATH")]
@@ -476,7 +488,7 @@ mod tests {
 
         assert!(indented >= 20, "only {indented} runnable lines, which reads as prose");
         assert!(GUIDANCE.contains("## Common workflows"), "no worked examples");
-        assert!(GUIDANCE.contains("| jq -r"), "nothing shows what --json is for");
+        assert!(GUIDANCE.contains("| jq"), "nothing shows what --json is for");
     }
 
     #[test]
