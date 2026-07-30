@@ -158,7 +158,10 @@ domain boundary. Not a command to split mechanically — report as a prompt.
 
 **RS-034 (script) — Duplicate function bodies.** Two functions with identical
 normalized bodies (across files or within one) must be lifted to one owner. Copying a
-sibling component's handlers is how 7-way duplication ships.
+sibling component's handlers is how 7-way duplication ships — which is the shape it is
+aimed at. Only substantial bodies count, several statements deep: a repeated statement or
+two is an idiom, or a delegation to the one owner this rule already asks for. The floor is
+statements rather than characters, so the finding cannot be answered by rewrapping a line.
 
 **RS-035 (judgment) — Published file layout.** A parent exposing bare `pub mod` lists
 with zero curated `pub use` makes callers depend on file layout. Deliberate namespacing
