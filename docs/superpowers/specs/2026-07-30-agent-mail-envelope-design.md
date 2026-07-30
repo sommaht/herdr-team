@@ -185,8 +185,8 @@ belongs in `spawn` as its own refusal, worded so this tool owns it:
 'operator' is reserved: it marks a human sender in delivered mail
 ```
 
-Exit status 2, alongside the other argument refusals. The reservation is one name, checked at parse
-time, before anything is created.
+Exit status 2, alongside the other argument refusals. It is `spawn`'s first pre-check, which is where
+the precondition property is already kept: a refused command has created nothing.
 
 ## What this does not guarantee
 
@@ -201,15 +201,20 @@ its sender exactly as much as it did before, which is to say completely.
 
 ## Where it lands
 
-`src/cmd/prompt/envelope.rs`, a new leaf under the existing `prompt` module. It composes and does
-nothing else: the sender's resolved identity, the reply address, and the body go in, and a string
-comes out. No herdr calls, no environment reads, no sink.
+`src/cmd/prompt/envelope.rs`, a new leaf under the existing `prompt` module, holding one type with
+two halves. `Envelope::resolve` reads `$HERDR_PANE_ID`, makes the one `agent get`, and applies the
+reply decision; `Envelope::wrap` is pure — a `from`, an optional reply address, and a body go in and
+a string comes out, with no herdr call, no environment read, and no sink. The wire format is the
+half worth pinning, and keeping it pure is what makes it pinnable.
 
-Composition happens inside `deliver`, which `spawn` already routes its first prompt through. One
-site, so a first prompt and a later one cannot drift into different shapes, and the re-send on stall
-reuses what was already composed rather than resolving the sender twice. `deliver` grows one
-parameter carrying the reply decision; sender resolution is a small function in `herdr::agent`
-beside `get`.
+Wrapping happens inside `deliver`, which `spawn` already routes its first prompt through. One site,
+so a first prompt and a later one cannot drift into different shapes, and the re-send on stall reuses
+what was already composed rather than resolving the sender twice. `deliver` grows one parameter
+carrying the reply decision.
+
+`HERDR_PANE_ID` becomes a constant in the `herdr` module rather than staying private to `spawn`. It
+is a fact about herdr's contract — the variable herdr exports into every pane it owns — and it now
+has two readers.
 
 The composer guard, the delivery wait, and the stall re-send are untouched. The guard reads the
 *target's* composer and has nothing to do with what is being sent.
