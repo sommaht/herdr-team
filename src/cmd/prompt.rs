@@ -10,7 +10,7 @@ use thiserror::Error;
 use crate::cmd::{AsExitStatus, Cmd, ExitStatus};
 use crate::core::{NonEmptyText, Sink};
 use crate::harness::{self, Composer};
-use crate::herdr::agent::{self, AgentRecord, COMPOSER_LINES, WORKING, Wait};
+use crate::herdr::agent::{self, AgentRecord, WORKING, Wait};
 use crate::herdr::{HerdrError, HerdrRef};
 
 // =====================================================================================================================
@@ -94,8 +94,10 @@ impl Cmd for PromptArgs {
         let before = agent::get(&self.target)?;
 
         if self.guarded() {
-            let snapshot = agent::read(&self.target, COMPOSER_LINES)?;
-            match harness::composer(before.kind(), &snapshot) {
+            // The harness decides what it needs to look at; this only performs the read it asks for.
+            let readiness =
+                harness::readiness(before.kind(), |source, lines| agent::read(&self.target, source, lines))?;
+            match readiness {
                 Composer::Occupied => {
                     return Err(PromptError::ComposerOccupied { target: self.target });
                 }
@@ -200,8 +202,8 @@ pub enum PromptError {
     Herdr(#[from] HerdrError),
     /// The target's composer holds unsent text.
     ///
-    /// Carries the target and nothing else. The guard's input is a snapshot of someone's
-    /// half-written message, so there is deliberately no field here that could hold it.
+    /// Carries the target and nothing else. What the guard read is someone's half-written message,
+    /// so there is deliberately no field here that could hold it.
     #[error("{target}'s composer holds unsent text; wait for it to clear, or pass --force to send anyway")]
     ComposerOccupied {
         /// The agent that was not prompted.
@@ -341,9 +343,9 @@ mod tests {
 
     #[test]
     fn a_refusal_never_says_what_the_composer_held() {
-        // The guard's input is a snapshot of someone's half-written message. The refusal says the
-        // composer holds unsent text and never says what that text is — there is no field on this
-        // variant that could carry it.
+        // What the guard read is someone's half-written message. The refusal says the composer holds
+        // unsent text and never says what that text is — there is no field on this variant that
+        // could carry it.
         let occupied = PromptError::ComposerOccupied { target: "reviewer".to_owned() };
 
         assert!(!occupied.to_string().contains("wait, before you commit"));

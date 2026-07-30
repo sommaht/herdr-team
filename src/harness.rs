@@ -1,32 +1,76 @@
-//! What this tool knows about each supported agent CLI: how to read its composer.
+//! What this tool knows about each supported agent CLI: whether it can be prompted right now.
 //!
-//! Touches no process and no pane — it is handed a detection snapshot as `&str` and answers whether
-//! the composer holds text. Locating the box is harness-agnostic and lives here once, because it is
-//! the same rule herdr's own detection applies. Reading what is inside it is per-harness, and that
-//! is what [`AgentHarness`] carries: today one character each, with the shared rule as a default
-//! method so a harness needing more than a marker overrides rather than special-cases.
+//! A caller asks [`readiness`] one question and learns nothing about how it was answered. That it
+//! takes a terminal snapshot, which snapshot, and how much of one, are this module's business — a
+//! command that knew those would have to be edited every time a harness needed something different
+//! to look at.
 //!
-//! A new harness is an [`AgentHarness`] impl plus one entry in `HARNESSES`.
+//! Touches no process and no pane. [`readiness`] is handed the *means* to read and decides what to
+//! ask for, so the I/O stays in [`crate::herdr`] and a test supplies a closure returning a literal.
+//!
+//! Locating the box is harness-agnostic and lives here once, because it is the same rule herdr's own
+//! detection applies. Everything inside it belongs to [`AgentHarness`] — today one character each,
+//! behind default methods so a harness needing more overrides rather than special-cases.
+//!
+//! A new harness is an [`AgentHarness`] impl plus one entry in [`HARNESSES`].
+
+mod claude;
+mod codex;
+
+use claude::ClaudeCode;
+use codex::Codex;
 
 // =====================================================================================================================
 // Harness
 // =====================================================================================================================
 
+/// What a harness needs read from a target before it can judge readiness.
+///
+/// Two values that are meaningless apart, and the caller of [`readiness`] passes them through
+/// without interpreting either — which is what keeps the choice of snapshot inside this module.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Probe {
+    /// herdr's `--source`: which of a pane's several renderings to take.
+    pub source: &'static str,
+    /// How many lines of it are enough.
+    pub lines: u32,
+}
+
+impl Default for Probe {
+    /// The plain-text bottom-buffer snapshot herdr's own agent detection reads, which is where every
+    /// harness known today renders its composer.
+    ///
+    /// Forty lines is more than any composer needs and costs nothing; only the bottom is used.
+    fn default() -> Self {
+        Self { source: "detection", lines: 40 }
+    }
+}
+
 /// A coding-agent CLI whose composer this tool can read.
 ///
 /// Deliberately not a registry of supported agents: herdr's kind list has 21 entries and grows, and
 /// restating it here would drift. An entry buys one thing — the ability to read that harness's
-/// composer — and a kind absent from it still gets a check through the probe tier in [`composer`].
+/// composer — and a kind absent from it still gets a check through the probe tier in [`readiness`].
 ///
-/// Each implementation names its own marker; [`occupied_after`] is the half they share. A harness
-/// whose composer needs more than a marker overrides [`Self::composer_occupied`] instead, which is
-/// the extension point the deferred placeholder-vs-typed-text discrimination will use.
+/// Both judgment methods have defaults, so an impl states only what makes it different. Today that
+/// is one character; the deferred placeholder-vs-typed-text work overrides
+/// [`composer_occupied`](Self::composer_occupied), and a harness that renders its composer somewhere
+/// else overrides [`probe`](Self::probe).
 pub trait AgentHarness {
     /// herdr's own kind label for this harness, as `agent get` reports it.
     fn kind(&self) -> &'static str;
 
     /// The character this harness's composer input begins after.
     fn marker(&self) -> char;
+
+    /// What this harness needs read in order to answer.
+    ///
+    /// A harness overriding this can only be reached through its kind: the probe tier has no harness
+    /// yet when it decides what to read, so it uses [`Probe::default`] and only harnesses content
+    /// with that can be identified by probing.
+    fn probe(&self) -> Probe {
+        Probe::default()
+    }
 
     /// Whether this harness's composer holds unsubmitted input.
     ///
@@ -40,35 +84,7 @@ pub trait AgentHarness {
 }
 
 /// Every harness this build can read, in probe order.
-const HARNESSES: [&dyn AgentHarness; 2] = [&ClaudeCode, &Codex];
-
-/// Claude Code, herdr kind `claude`.
-struct ClaudeCode;
-
-impl AgentHarness for ClaudeCode {
-    fn kind(&self) -> &'static str {
-        "claude"
-    }
-
-    /// U+276F, which Claude Code renders at the head of its composer.
-    fn marker(&self) -> char {
-        '❯'
-    }
-}
-
-/// Codex, herdr kind `codex`.
-struct Codex;
-
-impl AgentHarness for Codex {
-    fn kind(&self) -> &'static str {
-        "codex"
-    }
-
-    /// U+203A, which Codex renders at the head of its composer.
-    fn marker(&self) -> char {
-        '›'
-    }
-}
+pub const HARNESSES: [&dyn AgentHarness; 2] = [&ClaudeCode, &Codex];
 
 /// Resolves herdr's kind label back to the harness that reads it.
 ///
@@ -109,44 +125,56 @@ impl Composer {
     }
 }
 
-/// Whether the target's composer holds unsent text, read from a detection snapshot.
+/// Whether the target can be prompted right now.
+///
+/// `read` is the means, not the decision: it is handed the source and line count the resolved harness
+/// asked for and returns what it read. A caller therefore never names a snapshot, and a harness that
+/// needs to look somewhere else changes nothing outside this module. Any read failure is the
+/// caller's error type, returned untouched.
 ///
 /// `kind` is what `agent get` reported, which selects the harness. Resolution is two-tiered so an
 /// unfamiliar kind still gets a check rather than none: the reported kind's own harness answers if
 /// it recognizes the box, and anything else — an unknown kind, or a known one whose pane rendered
 /// something its harness cannot read — falls back to whichever harness does recognize it.
 ///
-/// **Fails open** in exactly two cases — the body cannot be located, or no harness recognized it.
+/// **Fails open** in exactly two cases — the box cannot be located, or no harness recognized it.
 /// Both deliver anyway, with a warning, because a tool that refused every pane it could not parse
 /// would be unusable the first time a harness changed its rendering.
 ///
-/// The guard is a snapshot, not a lock: a human can start typing between this read and the
+/// The answer is a snapshot, not a lock: a human can start typing between the read and the
 /// submission. Narrowing that window further would need something herdr does not expose.
-pub fn composer(kind: Option<&str>, snapshot: &str) -> Composer {
+///
+/// # Errors
+///
+/// Returns whatever `read` returned.
+pub fn readiness<E>(
+    kind: Option<&str>,
+    read: impl FnOnce(&'static str, u32) -> Result<String, E>,
+) -> Result<Composer, E> {
+    let harness = kind.and_then(by_kind);
+    let probe = harness.map_or_else(Probe::default, AgentHarness::probe);
+    let snapshot = read(probe.source, probe.lines)?;
+
     let lines: Vec<&str> = snapshot.lines().collect();
     let Some(body) = prompt_box_body(&lines) else {
-        return Composer::NoPromptBox;
+        return Ok(Composer::NoPromptBox);
     };
 
-    // The reported kind's own harness first. A kind this build does not know — or one whose harness
-    // does not recognize what it was handed — falls back to whichever harness does, so an
-    // unfamiliar agent still gets a check rather than none.
-    let occupied = kind
-        .and_then(by_kind)
-        .and_then(|harness| harness.composer_occupied(body))
-        .or_else(|| {
-            HARNESSES
-                .into_iter()
-                .find_map(|harness| harness.composer_occupied(body))
-        });
+    // The reported kind's own harness first, then every other, so a kind this build does not know —
+    // or a known one whose pane rendered something its harness cannot read — still gets a check.
+    let occupied = harness.and_then(|harness| harness.composer_occupied(body)).or_else(|| {
+        HARNESSES
+            .into_iter()
+            .find_map(|harness| harness.composer_occupied(body))
+    });
 
-    match occupied {
+    Ok(match occupied {
         Some(true) => Composer::Occupied,
         Some(false) => Composer::Empty,
         // No harness recognized the box. Reported as an unknown marker rather than as `Empty`,
         // because claiming an unidentified composer is empty is a guarantee this did not earn.
         None => Composer::UnknownMarker,
-    }
+    })
 }
 
 // =====================================================================================================================
@@ -271,11 +299,41 @@ mod tests {
         },
     ];
 
+    /// `readiness` against a fixture instead of a pane.
+    ///
+    /// The whole reason the read is a closure: this module never performs I/O, so a test hands it a
+    /// literal and the read cannot fail.
+    fn against(kind: Option<&str>, snapshot: &'static str) -> Composer {
+        readiness(kind, |_source, _lines| {
+            Ok::<_, std::convert::Infallible>(snapshot.to_owned())
+        })
+        .expect("reading a fixture is infallible")
+    }
+
     #[test]
     fn the_guard_answers_each_fixture_the_way_the_design_says() {
         for case in &CASES {
-            assert_eq!(composer(case.kind, case.snapshot), case.expected, "{}", case.name);
+            assert_eq!(against(case.kind, case.snapshot), case.expected, "{}", case.name);
         }
+    }
+
+    /// The caller reads what the resolved harness asked for, and nothing else chooses it.
+    #[test]
+    fn the_read_is_the_one_the_resolved_harness_asked_for() {
+        let mut asked = None;
+        let _ = readiness(Some("claude"), |source, lines| {
+            asked = Some((source, lines));
+            Ok::<_, std::convert::Infallible>(String::new())
+        });
+
+        assert_eq!(asked, Some((Probe::default().source, Probe::default().lines)));
+    }
+
+    /// A read failure is the caller's, returned untouched rather than folded into an answer.
+    #[test]
+    fn a_failed_read_is_not_reported_as_a_composer_answer() {
+        let answer = readiness(Some("claude"), |_source, _lines| Err("the pane went away"));
+        assert_eq!(answer, Err("the pane went away"));
     }
 
     #[test]
@@ -300,12 +358,12 @@ mod tests {
         // A codex box reported as claude: claude's harness cannot read it, codex's can, and the
         // answer comes from the one that recognized it rather than from the label.
         assert_eq!(
-            composer(Some("claude"), include_str!("../fixtures/composer/codex-empty.txt")),
+            against(Some("claude"), include_str!("../fixtures/composer/codex-empty.txt")),
             Composer::Empty
         );
         // Nothing recognizes this one, so it fails open rather than being called occupied.
         assert_eq!(
-            composer(Some("claude"), include_str!("../fixtures/composer/unknown-marker.txt")),
+            against(Some("claude"), include_str!("../fixtures/composer/unknown-marker.txt")),
             Composer::UnknownMarker
         );
     }
