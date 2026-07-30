@@ -23,14 +23,11 @@ use crate::config::{ConfigError, Presets};
 use crate::core::{AgentName, Backoff, NonEmptyText, PaneId, Sink};
 use crate::herdr::agent::{self, AgentRecord, WORKING, Wait};
 use crate::herdr::surface::{self, Checkout, Focus, Placement};
-use crate::herdr::{HerdrError, HerdrRef};
+use crate::herdr::{HerdrError, HerdrRef, PANE_VARIABLE};
 
 // =====================================================================================================================
 // Constants
 // =====================================================================================================================
-
-/// The environment variable herdr exports into every pane it owns, holding that pane's id.
-const PANE_VARIABLE: &str = "HERDR_PANE_ID";
 
 /// How long `agent start` is retried while the new pane's shell is still starting, in milliseconds.
 ///

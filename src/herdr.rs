@@ -22,6 +22,12 @@ use crate::cmd::ExitStatus;
 /// The binary every call in this crate runs. Named in exactly one place.
 const BINARY: &str = "herdr";
 
+/// The environment variable herdr exports into every pane it owns, holding that pane's id.
+///
+/// Lives here rather than in a command because it is a fact about herdr's contract, and it has two
+/// readers: `spawn` anchors a split on it, and the mail envelope resolves the sender from it.
+pub const PANE_VARIABLE: &str = "HERDR_PANE_ID";
+
 // =====================================================================================================================
 // Run
 // =====================================================================================================================
@@ -187,6 +193,15 @@ impl HerdrError {
     /// where herdr's vocabulary is read — the same reason [`exit_status`](Self::exit_status) is here.
     pub fn is_undelivered(&self) -> bool {
         matches!(self.code(), Some("agent_prompt_stalled" | "timeout"))
+    }
+
+    /// Whether herdr answered that the target does not exist.
+    ///
+    /// Distinguished from every other refusal because the two have opposite meanings for the mail
+    /// envelope: a pane herdr owns but hosts no agent in is a pane a person is typing in, where any
+    /// other failure leaves an agent possibly present and the pane id still worth addressing.
+    pub fn is_not_found(&self) -> bool {
+        matches!(self.code(), Some("agent_not_found"))
     }
 
     /// herdr's command and code, for nesting inside this crate's own error envelope.
@@ -413,6 +428,28 @@ mod tests {
             message: "…".to_owned(),
         };
         assert!(!refused.is_undelivered());
+    }
+
+    #[test]
+    fn a_missing_agent_is_recognised_so_a_caller_can_tell_it_from_a_transport_failure() {
+        let missing = HerdrError::Refused {
+            command: "agent get".to_owned(),
+            code: "agent_not_found".to_owned(),
+            message: "agent target w4:p3 not found".to_owned(),
+        };
+        assert!(missing.is_not_found());
+
+        let other = HerdrError::Refused {
+            command: "agent get".to_owned(),
+            code: "agent_target_ambiguous".to_owned(),
+            message: "agent target reviewer is ambiguous".to_owned(),
+        };
+        assert!(!other.is_not_found());
+    }
+
+    #[test]
+    fn the_pane_variable_is_the_one_herdr_exports_into_every_pane_it_owns() {
+        assert_eq!(PANE_VARIABLE, "HERDR_PANE_ID");
     }
 
     #[test]
