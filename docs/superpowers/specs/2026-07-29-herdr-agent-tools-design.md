@@ -36,8 +36,7 @@ Three commands:
 
 ## The findings this addresses
 
-Observed while running eight concurrent agent seats over four rounds of prompting. Restated here in
-full, because the research notes they come from live outside this repository.
+Observed while running eight concurrent agent seats over four rounds of prompting.
 
 1. **A piped first prompt did not arrive.** The shell function read stdin, called the prompt
    command, reported success, and exited 0. The pane showed an empty composer and a zero context
@@ -401,11 +400,9 @@ under a `Tests` header.
 3. **Composer occupancy, table-driven over committed fixtures** — detection snapshots asserting
    empty, occupied, and both fail-open paths (no rules found, unrecognized marker).
 
-   The fixtures are captured from real panes for fidelity and then **scrubbed before they are
-   committed**: a snapshot carries the pane's actual transcript, so directory paths, project names,
-   and conversation content all have to be replaced with neutral filler. What the guard reads is the
-   composer's structure — the rules, the marker, and whether anything follows it — so scrubbing the
-   surrounding text costs the fixture nothing.
+   The fixtures carry neutral filler above the composer. A snapshot captured from a live pane holds
+   that pane's whole transcript, and the guard reads only the composer's structure — the rules, the
+   marker, and whether anything follows it — so the surrounding text is filler by design.
 4. **Error-code mapping** — herdr code to `ExitStatus`, including the unknown-code default.
 5. **Sink wire forms** — exact-string, in both modes.
 
@@ -429,39 +426,12 @@ Dependencies: `clap` with `derive`, `clap-stdin`, `serde`, `serde_json`, `thiser
 `getter-methods`, and `toml`. `tempfile` as a dev-dependency. `toml` is the one addition relative to
 the predecessor, and it replaces the two external command-line tools the shell version needed.
 
-`docs/STYLE-GUIDE.md` is adapted, not copied. Every rule the guide relies on is stated inline; it
-cites no rule-identifier scheme and no script from outside this repository, and its verification
-section lists only the four commands above.
+`docs/STYLE-GUIDE.md` states every rule it relies on inline, and its verification section lists only
+the four commands above.
 
 `CLAUDE.md` and `AGENTS.md` carry three items: follow the style guide; **herdr is the authority for
 its own CLI syntax** — print a command group to read it rather than guessing a flag; and never put
 prompt text or captured terminal content in an error message.
-
-### The external-reference rule, and what it does not cover
-
-**No shipped file references anything outside this repository.** No home-directory paths, no
-neighbouring project names, no personal configuration. That covers the spec, the style guide, the
-README, the agent instructions, and every line of code and doc comment. The findings above are
-restated rather than linked, and the two shell functions being replaced are described by behaviour
-rather than by location.
-
-It deliberately does **not** gag the working documents. An implementation plan under
-`docs/superpowers/plans/` may name the predecessor repository's path, because the agent executing
-that plan has to find the thing it is porting — the project scaffolding, the style guide, and the
-`Cmd`/`Sink`/exit-status architecture all come from there, and a plan that says "port the style
-guide" without saying from where is not executable. The predecessor's own style guide delegates its
-core Rust rules to an external skill and cites that skill's rule identifiers; those citations are
-what must not survive the port, and restating each rule inline is the work.
-
-Two gates enforce the split rather than one grep:
-
-1. **Every shipped file is written self-contained from the start.** Not scrubbed afterwards —
-   written that way, because a rule restated inline reads differently from a citation with the
-   citation deleted.
-2. **A pre-publication pass greps every committed file, plans included**, for `~/`, `/Users/`, and
-   the neighbouring project names, and scrubs what it finds. This is a task with an owner, not a
-   good intention, and it runs before the repository is made public rather than at the end of the
-   MVP.
 
 ## Open for later
 

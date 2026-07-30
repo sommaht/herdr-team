@@ -1,0 +1,25 @@
+#!/bin/sh
+# rust-style pre-commit hook: run the mechanical style gate on staged Rust files.
+# Install: cp .claude/skills/rust-style/assets/pre-commit .git/hooks/pre-commit
+#          chmod +x .git/hooks/pre-commit
+# Bypass for a genuinely exceptional commit: git commit --no-verify (the gate
+# still runs at review; --no-verify defers findings, it does not waive them).
+
+STAGED=$(git diff --cached --name-only --diff-filter=ACM | grep '\.rs$' || true)
+[ -z "$STAGED" ] && exit 0
+
+GATE="$HOME/.claude/skills/rust-style/scripts/check.sh"
+if ! [ -x "$GATE" ]; then
+    echo "pre-commit: rust-style gate not found at $GATE (skipping)" >&2
+    exit 0
+fi
+
+# shellcheck disable=SC2086 — file list is newline-safe for tracked rust paths
+sh "$GATE" $STAGED
+STATUS=$?
+if [ "$STATUS" -ne 0 ]; then
+    echo "" >&2
+    echo "pre-commit: rust-style gate found issues (rule IDs above; see" >&2
+    echo ".claude/skills/rust-style/references/gate.md). Fix or --no-verify." >&2
+fi
+exit "$STATUS"
