@@ -9,6 +9,9 @@
     reason = "the submodules arrive in Task 8 and their callers in Tasks 10 and 11"
 )]
 
+pub mod agent;
+pub mod surface;
+
 use std::process::Command;
 
 use serde::Serialize;
