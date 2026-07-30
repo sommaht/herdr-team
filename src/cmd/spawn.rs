@@ -1,11 +1,10 @@
 //! `spawn` — create a surface and start a preset-configured agent in it.
 //!
-//! **RS-033 resolved, not waived:** this is the longest file here because it is the longest command
-//! — five ordered steps across three placements, each of which can fail after the previous one has
-//! already changed something in herdr. It reads as one transaction and splitting it would hide that
-//! ordering, which is the exception RS-033 names. The only separable piece is [`Backoff`], and at
-//! twenty-odd lines with a single consumer RS-032 argues against minting a file for it; it moves the
-//! day a second caller wants a retry schedule.
+//! The longest file here because it is the longest command: five ordered steps across three
+//! placements, each of which can fail after the previous one has already changed something in herdr.
+//! It reads as one transaction, so splitting it would hide that ordering and it stays one file. If it
+//! does have to shrink, [`Backoff`] is the separable piece — kept here only because one consumer does
+//! not justify a file of its own.
 
 use std::fmt::Display;
 use std::path::PathBuf;
@@ -31,10 +30,10 @@ use crate::herdr::{HerdrError, HerdrRef};
 /// The environment variable herdr exports into every pane it owns, holding that pane's id.
 const PANE_VARIABLE: &str = "HERDR_PANE_ID";
 
-/// The caller's own workspace, used to pin where `--tab` opens.
+/// The caller's own workspace, used to pin where `--placement tab` opens.
 ///
-/// Unlike [`PANE_VARIABLE`], an absent value is not an error: `--tab` still works without it, it
-/// just falls back to herdr's own default placement.
+/// Unlike [`PANE_VARIABLE`], an absent value is not an error: a tab still opens without it, it just
+/// falls back to herdr's own default placement.
 const WORKSPACE_VARIABLE: &str = "HERDR_WORKSPACE_ID";
 
 /// How long `agent start` is retried while the new pane's shell is still starting, in milliseconds.
@@ -61,16 +60,23 @@ const BACKOFF_CAP_MS: u64 = 2_000;
 /// starts the agent there.
 #[derive(Debug, Args)]
 #[command(after_help = "Examples:\n  \
-    herdr-agent-tools spawn reviewer --tab --preset opus\n  \
+    herdr-agent-tools spawn reviewer --placement tab --preset opus\n  \
     herdr-agent-tools spawn fixer --preset sonnet --prompt \"Fix the flaky tests\"\n  \
     git diff | herdr-agent-tools spawn reviewer --prompt -\n  \
-    herdr-agent-tools spawn big --workspace --preset fable -- --resume")]
+    herdr-agent-tools spawn big --placement workspace --preset fable -- --resume")]
 pub struct SpawnArgs {
     /// The agent's name; must satisfy herdr's rule, which is checked before anything is created.
     name: AgentName,
 
-    #[command(flatten)]
-    placement: PlacementFlags,
+    /// Where the agent's pane comes from: a split of the calling pane, which needs `HERDR_PANE_ID`,
+    /// or the root pane of a new tab or workspace.
+    // Not a doc comment: a field's doc comment on this struct is its `--help` text, and why the
+    // default is a string is not something a caller needs. `default_value_t` would want a `Display`
+    // on `Placement` whose only consumer is this line, and which has to agree with the value parser
+    // to work at all. A parse with no `--placement` exercises the string, so a typo in it fails a
+    // test rather than reaching a caller.
+    #[arg(long, value_enum, default_value = "pane")]
+    placement: Placement,
 
     /// The preset to start; defaults to the config file's `default`.
     #[arg(long, value_name = "NAME")]
@@ -104,33 +110,7 @@ pub struct SpawnArgs {
     agent_args: Vec<String>,
 }
 
-/// Where the agent's pane comes from. Mutually exclusive, so clap reports the conflicting pair.
-#[derive(Debug, Args)]
-#[group(multiple = false)]
-struct PlacementFlags {
-    /// Split the calling pane. The default, and it needs `HERDR_PANE_ID`.
-    #[arg(long)]
-    pane: bool,
-    /// Open a new tab labelled with the agent's name.
-    #[arg(long)]
-    tab: bool,
-    /// Open a new workspace labelled with the agent's name.
-    #[arg(long)]
-    workspace: bool,
-}
-
 impl SpawnArgs {
-    /// Which surface to create. Splitting the calling pane is the default.
-    fn placement(&self) -> Placement {
-        if self.placement.tab {
-            Placement::Tab
-        } else if self.placement.workspace {
-            Placement::Workspace
-        } else {
-            Placement::Pane
-        }
-    }
-
     /// Whether the new surface takes the user's focus.
     fn focus(&self) -> Focus {
         if self.focus { Focus::Take } else { Focus::Leave }
@@ -144,8 +124,7 @@ impl Cmd for SpawnArgs {
     /// Pre-checks, preset, surface, agent, first prompt — in that order, because a pre-check that
     /// runs after a surface exists is not a pre-check.
     fn execute(self, sink: &Sink) -> Result<Self::Ok, Self::Err> {
-        let placement = self.placement();
-        let anchor = match placement {
+        let anchor = match self.placement {
             Placement::Pane => Some(anchor(std::env::var(PANE_VARIABLE).ok().as_deref())?),
             Placement::Tab | Placement::Workspace => None,
         };
@@ -163,7 +142,7 @@ impl Cmd for SpawnArgs {
         let cwd = cwd.to_string_lossy().into_owned();
 
         // Everything above is read-only, so nothing exists yet if any of it failed.
-        let pane = match (placement, anchor) {
+        let pane = match (self.placement, anchor) {
             (Placement::Pane, Some(anchor)) => surface::split(&anchor, &cwd, self.focus())?,
             (Placement::Tab, _) => {
                 let workspace = std::env::var(WORKSPACE_VARIABLE).ok();
@@ -195,7 +174,7 @@ impl SpawnArgs {
 
         let Some(text) = &self.prompt else {
             return Ok(Spawned {
-                placement: self.placement(),
+                placement: self.placement,
                 delivered: None,
                 agent: started,
             });
@@ -209,7 +188,7 @@ impl SpawnArgs {
         };
         let agent = deliver(pane, text, Some(&wait), sink)?;
         Ok(Spawned {
-            placement: self.placement(),
+            placement: self.placement,
             delivered: Some(started.status() != WORKING),
             agent,
         })
@@ -282,8 +261,8 @@ impl Display for Spawned {
 /// Failure of the spawn flow.
 #[derive(Debug, Error)]
 pub enum SpawnError {
-    /// `--pane` with no `HERDR_PANE_ID`.
-    #[error("--pane needs a calling herdr pane and HERDR_PANE_ID is unset; use --tab or --workspace")]
+    /// `--placement pane` with no `HERDR_PANE_ID`.
+    #[error("--placement pane needs a calling herdr pane and HERDR_PANE_ID is unset; use --placement tab or workspace")]
     MissingAnchor,
     /// The preset file could not be read, or did not hold the named preset.
     #[error(transparent)]
@@ -439,24 +418,32 @@ mod tests {
             .unwrap()
     }
 
+    /// A typo is answered with the whole value set, which the flag group it replaced could not do:
+    /// that reported whichever pair happened to conflict and never named the third.
     #[test]
-    fn conflicting_placement_flags_are_rejected_rather_than_last_one_wins() {
-        // `--tab --pane` is a typo, not a choice, and clap names both flags in its own exit-2 error.
-        let error = Harness::try_parse_from(["spawn", "reviewer", "--tab", "--pane"]).unwrap_err();
+    fn an_unknown_placement_is_rejected_and_the_error_lists_the_ones_that_exist() {
+        let error = Harness::try_parse_from(["spawn", "reviewer", "--placement", "tba"]).unwrap_err();
 
         let rendered = error.to_string();
         assert!(
-            rendered.contains("--tab") && rendered.contains("--pane"),
+            ["pane", "tab", "workspace"]
+                .iter()
+                .all(|value| rendered.contains(value)),
             "got {rendered}"
         );
     }
 
     #[test]
     fn placement_defaults_to_splitting_the_calling_pane() {
-        assert_eq!(parse(&["spawn", "reviewer"]).placement(), Placement::Pane);
-        assert_eq!(parse(&["spawn", "reviewer", "--tab"]).placement(), Placement::Tab);
+        // Also the test that exercises the string default: a typo in `default_value` fails here
+        // rather than reaching a caller.
+        assert_eq!(parse(&["spawn", "reviewer"]).placement, Placement::Pane);
         assert_eq!(
-            parse(&["spawn", "reviewer", "--workspace"]).placement(),
+            parse(&["spawn", "reviewer", "--placement", "tab"]).placement,
+            Placement::Tab
+        );
+        assert_eq!(
+            parse(&["spawn", "reviewer", "--placement", "workspace"]).placement,
             Placement::Workspace
         );
     }
@@ -483,10 +470,10 @@ mod tests {
     }
 
     #[test]
-    fn the_usage_error_says_which_flags_work_instead() {
+    fn the_usage_error_says_which_placements_work_instead() {
         assert_eq!(
             anchor(None).unwrap_err().to_string(),
-            "--pane needs a calling herdr pane and HERDR_PANE_ID is unset; use --tab or --workspace"
+            "--placement pane needs a calling herdr pane and HERDR_PANE_ID is unset; use --placement tab or workspace"
         );
     }
 

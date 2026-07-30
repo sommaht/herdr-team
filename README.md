@@ -15,7 +15,7 @@ on stdin.
 | `presets` | List what the preset config holds |
 
 ```
-herdr-agent-tools spawn reviewer --tab --preset opus --prompt "Review the branch"
+herdr-agent-tools spawn reviewer --placement tab --preset opus --prompt "Review the branch"
 git diff | herdr-agent-tools prompt reviewer -
 herdr-agent-tools presets
 ```
