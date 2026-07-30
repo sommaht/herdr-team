@@ -12,6 +12,7 @@ use std::fmt::Display;
 use serde::Serialize;
 
 use crate::core::Sink;
+use crate::herdr::HerdrRef;
 
 // =====================================================================================================================
 // Command
@@ -53,6 +54,14 @@ pub trait Cmd {
 pub trait AsExitStatus: std::error::Error {
     /// The exit status the process reports for this failure.
     fn exit_status(&self) -> ExitStatus;
+
+    /// herdr's own command and code, when this failure came from herdr.
+    ///
+    /// Defaulted to `None`, because most failures are this crate's own. A command's error enum
+    /// forwards this from whichever variant wraps a [`HerdrError`](crate::herdr::HerdrError).
+    fn herdr(&self) -> Option<HerdrRef> {
+        None
+    }
 }
 
 /// A command that cannot fail. The body matches on an uninhabited type, which is the honest way to
@@ -115,12 +124,18 @@ pub struct Failure {
     /// The failure's own `Display` form, verbatim. A herdr failure's `Display` *is* herdr's
     /// message, and nothing re-words it.
     message: String,
+    /// herdr's command and code, when the failure came from herdr.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    herdr: Option<HerdrRef>,
 }
 
 impl Failure {
     /// Renders a command failure for the sink.
     pub fn new<E: AsExitStatus + ?Sized>(error: &E) -> Self {
-        Self { message: error.to_string() }
+        Self {
+            message: error.to_string(),
+            herdr: error.herdr(),
+        }
     }
 }
 
@@ -157,6 +172,34 @@ mod tests {
         assert_eq!(u8::from(ExitStatus::Usage), 2);
         assert_eq!(u8::from(ExitStatus::NotFound), 3);
         assert_eq!(u8::from(ExitStatus::Conflict), 5);
+    }
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("agent target pane w4:p16 is not an available shell")]
+    struct PaneBusy;
+
+    impl AsExitStatus for PaneBusy {
+        fn exit_status(&self) -> ExitStatus {
+            ExitStatus::Conflict
+        }
+
+        fn herdr(&self) -> Option<HerdrRef> {
+            crate::herdr::HerdrError::Refused {
+                command: "agent start".to_owned(),
+                code: "agent_pane_busy".to_owned(),
+                message: "agent target pane w4:p16 is not an available shell".to_owned(),
+            }
+            .reference()
+            .into()
+        }
+    }
+
+    #[test]
+    fn a_herdr_failure_nests_herdrs_command_and_code_beside_its_message() {
+        assert_eq!(
+            serde_json::to_string(&Failure::new(&PaneBusy)).unwrap(),
+            r#"{"message":"agent target pane w4:p16 is not an available shell","herdr":{"command":"agent start","code":"agent_pane_busy"}}"#
+        );
     }
 
     #[test]
