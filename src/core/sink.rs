@@ -180,35 +180,44 @@ fn write_line<T: Display + ?Sized>(stream: &RefCell<Box<dyn Write>>, line: &T) {
 }
 
 // =====================================================================================================================
+// Test support
+// =====================================================================================================================
+
+/// A writer a test can read back, since [`Sink`] owns its writers.
+///
+/// Lives outside `mod tests` because two modules capture a sink's output — this file's own wire-form
+/// tests, and the mail envelope's check that a diagnostic names a pane and nothing else.
+#[cfg(test)]
+#[derive(Clone, Default)]
+pub(crate) struct SharedBuf(std::rc::Rc<RefCell<Vec<u8>>>);
+
+#[cfg(test)]
+impl SharedBuf {
+    /// Everything written so far.
+    pub(crate) fn contents(&self) -> String {
+        String::from_utf8(self.0.borrow().clone()).unwrap()
+    }
+}
+
+#[cfg(test)]
+impl Write for SharedBuf {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.0.borrow_mut().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+// =====================================================================================================================
 // Tests
 // =====================================================================================================================
 
 #[cfg(test)]
 mod tests {
-    use std::rc::Rc;
-
     use super::*;
-
-    /// A writer the test can read back, since `Sink` owns its writers.
-    #[derive(Clone, Default)]
-    struct SharedBuf(Rc<RefCell<Vec<u8>>>);
-
-    impl SharedBuf {
-        fn contents(&self) -> String {
-            String::from_utf8(self.0.borrow().clone()).unwrap()
-        }
-    }
-
-    impl Write for SharedBuf {
-        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-            self.0.borrow_mut().extend_from_slice(buf);
-            Ok(buf.len())
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            Ok(())
-        }
-    }
 
     #[derive(Serialize)]
     struct Spawned {
