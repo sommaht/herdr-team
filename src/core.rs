@@ -16,6 +16,8 @@ mod sink;
 
 pub use backoff::Backoff;
 pub use sink::{OutputMode, Sink};
+#[cfg(test)]
+pub(crate) use sink::SharedBuf;
 
 use std::borrow::Cow;
 use std::str::FromStr;
