@@ -546,12 +546,21 @@ the shape is the host's to define. Each harness answers for its own via `AgentHa
 command never learns an envelope's shape — the same bargain `readiness` already makes in the other
 direction.
 
-The envelope is a *defaulted* trait method that no harness overrides today, and that is deliberate
-rather than unfinished. The tool this borrows the idea from wraps Claude Code, Gemini CLI, and Codex in
-one shape, from a single boolean flag. Only Claude Code's contract has actually been read here, so
-inventing a second shape would be guessing at someone else's interface — the same error as guessing a
-herdr flag. The flag still takes a harness rather than being a boolean, because it makes the host
-explicit and gives a divergence somewhere to land without a flag change.
+`hook` is a **required** trait method, not a defaulted one, even though both impls call the same shared
+envelope builder today. A default would let a harness added later inherit an envelope nobody checked
+against its host; requiring it means the author has to state what that host reads, and each impl's doc
+comment is where the evidence for that claim lives. The two claims are not equally strong, and saying
+so is the point:
+
+- **Claude Code** — its documented `SessionStart` shape, and the basis for the shared builder.
+- **Codex** — the same envelope on weaker evidence. Established: it runs a `SessionStart` hook, and its
+  hooks answer with JSON on stdout, since a generated Codex hook config falls back to `echo '{}'` on
+  every event. Not established: which keys it reads to inject context. The shape rests on the tool this
+  borrowed the idea from wrapping all three of its hosts in one envelope from a single flag.
+
+That asymmetry is exactly what a defaulted method would have hidden. The flag takes a harness rather
+than being a boolean for the same reason: it makes the host explicit, and gives a divergence somewhere
+to land without a flag change.
 
 **The presets table is generated**, from the same `PresetList` the `presets` command renders, so what
 the brief says about presets cannot disagree with what `spawn --preset` will do.

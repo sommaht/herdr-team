@@ -19,6 +19,15 @@ impl AgentHarness for ClaudeCode {
     fn marker(&self) -> char {
         '❯'
     }
+
+    /// Claude Code's documented `SessionStart` shape: a `hookSpecificOutput` object whose
+    /// `additionalContext` string is injected into the session.
+    ///
+    /// This is the one host whose contract is the basis for [`super::session_start`] rather than an
+    /// inference from it.
+    fn hook(&self, context: &str) -> Result<String, serde_json::Error> {
+        super::session_start(context)
+    }
 }
 
 // =====================================================================================================================

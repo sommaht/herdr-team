@@ -30,6 +30,23 @@ use serde::Serialize;
 /// The hook event a brief answers. One value today, named rather than spelled inline.
 const SESSION_START: &str = "SessionStart";
 
+/// `context` in the `SessionStart` envelope: `{"hookSpecificOutput":{…,"additionalContext":…}}`.
+///
+/// Shared by the impls that say their host reads this shape, so agreeing on an envelope is a call each
+/// makes rather than something inherited. What is *not* shared is the claim — see each impl.
+///
+/// # Errors
+///
+/// [`serde_json::Error`], which two string fields cannot provoke.
+fn session_start(context: &str) -> Result<String, serde_json::Error> {
+    serde_json::to_string(&HookEnvelope {
+        hook_specific_output: HookPayload {
+            hook_event_name: SESSION_START,
+            additional_context: context,
+        },
+    })
+}
+
 /// The hook envelope a host parses from stdout.
 ///
 /// A serde struct rather than a hand-assembled string, so the brief is escaped by the same code that
@@ -79,11 +96,11 @@ impl Default for Probe {
 /// restating it here would drift. An entry buys one thing — the ability to read that harness's
 /// composer — and a kind absent from it still gets a check through the probe tier in [`readiness`].
 ///
-/// Every method but the two below has a default, so an impl states only what makes it different. Today
-/// that is one character; the deferred placeholder-vs-typed-text work overrides
-/// [`composer_occupied`](Self::composer_occupied), a harness that renders its composer somewhere else
-/// overrides [`probe`](Self::probe), and a host whose hook contract diverges overrides
-/// [`hook`](Self::hook).
+/// The judgment methods have defaults, so an impl states only what makes it different: the deferred
+/// placeholder-vs-typed-text work overrides [`composer_occupied`](Self::composer_occupied), and a
+/// harness that renders its composer somewhere else overrides [`probe`](Self::probe). The three
+/// *declarations* — kind, marker, and hook envelope — are required, because each is a claim about a
+/// specific host that someone has to make deliberately.
 pub trait AgentHarness: std::fmt::Debug {
     /// herdr's own kind label for this harness, as `agent get` reports it.
     fn kind(&self) -> &'static str;
@@ -93,24 +110,16 @@ pub trait AgentHarness: std::fmt::Debug {
 
     /// `context` wrapped the way this harness's host wants it delivered at session start.
     ///
-    /// Defaulted to the `SessionStart` envelope, which is what every host known here reads today — the
-    /// same one shape the tool this borrows the idea from emits for all of its supported hosts. The
-    /// default is deliberate rather than lazy: inventing a second shape for a host whose contract has
-    /// not been read would be guessing at someone else's interface, and the override is here for the
-    /// day one is read and found to differ.
+    /// Required rather than defaulted, though both impls call [`session_start`] today. A default would
+    /// let a harness added later inherit an envelope nobody checked against its host; making it
+    /// required means the author has to say what that host reads, and each impl's doc comment is where
+    /// the evidence for that claim goes.
     ///
     /// # Errors
     ///
     /// [`serde_json::Error`] if the envelope cannot be serialized, which two string fields cannot
     /// provoke — the signature carries it rather than panicking on a case that would be a bug here.
-    fn hook(&self, context: &str) -> Result<String, serde_json::Error> {
-        serde_json::to_string(&HookEnvelope {
-            hook_specific_output: HookPayload {
-                hook_event_name: SESSION_START,
-                additional_context: context,
-            },
-        })
-    }
+    fn hook(&self, context: &str) -> Result<String, serde_json::Error>;
 
     /// What this harness needs read in order to answer.
     ///
