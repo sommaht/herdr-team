@@ -7,6 +7,7 @@ use super::AgentHarness;
 /// Its composer is a single input line inside a bordered box, with the marker in the gutter and any
 /// draft to the right of it — so the shared marker rule reads it, and this impl adds nothing beyond
 /// naming the marker.
+#[derive(Debug)]
 pub struct ClaudeCode;
 
 impl AgentHarness for ClaudeCode {

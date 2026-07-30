@@ -30,6 +30,17 @@ use crate::herdr::HerdrRef;
 /// The parser shape and the command are one type on purpose: `#[arg]` fields parse straight into
 /// domain types, so a bad value fails at parse time and nothing downstream re-validates.
 pub trait Cmd {
+    /// Whether this command's result is the same text in both output modes.
+    ///
+    /// The one exception to the crate's `--json` contract, and `prime` is the only override. Its result
+    /// *is* a document: wrapping prose in a JSON envelope buys escaping and no information, and a
+    /// caller that habitually passes `--json` is better served the brief than a single escaped string.
+    /// Everything else has fields worth flattening, so the default is `false`.
+    ///
+    /// Only the *result* is affected. A failure is still JSON under `--json`, because a consumer
+    /// branching on failures needs the tag and the status whatever the command was.
+    const TEXT_IN_BOTH_MODES: bool = false;
+
     /// What this command produces on success — rendered by the sink, never printed here.
     ///
     /// `Display` and `Serialize` are independent impls rather than one derived from the other,

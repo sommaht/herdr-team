@@ -89,7 +89,11 @@ fn main() -> ExitCode {
 fn run<C: Cmd>(command: C, sink: &Sink) -> ExitCode {
     match command.execute(sink) {
         Ok(value) => {
-            sink.out(&value);
+            if C::TEXT_IN_BOTH_MODES {
+                sink.out_text(&value);
+            } else {
+                sink.out(&value);
+            }
             ExitStatus::Success.into()
         }
         Err(error) => {

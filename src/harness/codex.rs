@@ -7,6 +7,7 @@ use super::AgentHarness;
 /// Its composer grows downward as a draft wraps, so a draft can sit on a line below the marker's.
 /// The shared rule already counts any non-empty line in the box, which is what makes that work
 /// without per-harness logic here.
+#[derive(Debug)]
 pub struct Codex;
 
 impl AgentHarness for Codex {

@@ -530,39 +530,63 @@ sets every constraint that follows.
 guarantees a running server, and a hook that fails is worse than one that says little. An absent or
 unreadable config prints the prose with "no presets configured" where the table goes, and exits 0.
 
-**Hand-written prose, not rendered help.** Composing it from clap's command tree was considered and
-rejected: five subcommands render past two hundred lines, and always-on context has a cost that a
-reference dump cannot justify when `--help` is one command away. What an agent cannot look up on
-demand is that the tool exists, when to reach for it, and which failures are worth retrying — so
-that is what this says, in workflow shape rather than flag shape.
+**Invocations grouped by intent, not explanation.** Composing it from clap's command tree was
+considered and rejected: five subcommands render past two hundred lines, and always-on context has a
+cost that a reference dump cannot justify when `--help` is one command away.
 
-**Two halves are generated**, because generating them is what stops them drifting. The presets table
-comes from the same `PresetList` the `presets` command renders, so what the brief says about presets
-cannot disagree with what `spawn --preset` will do. And the **command index** — one line per
-subcommand, name and description — comes from clap's tree, where each `*Args` struct's doc comment is
-already the description `--help` prints.
+The first draft went too far the other way and was mostly paragraphs. A caller reaching for this wants
+the invocation, so the brief is blocks of runnable lines under `## Launching agents`, `## Prompting
+agents`, `## Ending agents`, and `## Common workflows` — with the prose that remains attached to the
+line it qualifies. `prompt` returning on delivery rather than on completion is a clause on the
+`--wait-until` row, not a section. Two blocks stay tabular because they are the things a flag list
+genuinely cannot say: which failures are worth retrying, and which commands refuse by default.
 
-That second one is a change from the draft below, which hand-wrote a synopsis with each command's key
-flags. Generating it deletes a test rather than passing one: there is no longer a prose command name
-that could fail to resolve. It also narrows what the prose has to carry, since the flags an agent most
-needs are named in the paragraphs anyway. This is not the rendered help this section rejects — a
-four-line index of names and descriptions is different in kind from two hundred lines of flags.
+**`--hook <harness>` wraps it for a host.** A session-start hook wants JSON on stdout, not text, and
+the shape is the host's to define. Each harness answers for its own via `AgentHarness::hook`, so this
+command never learns an envelope's shape — the same bargain `readiness` already makes in the other
+direction.
 
-Three tests hold the remaining prose honest, since a static text blob is otherwise the least-tested
+The envelope is a *defaulted* trait method that no harness overrides today, and that is deliberate
+rather than unfinished. The tool this borrows the idea from wraps Claude Code, Gemini CLI, and Codex in
+one shape, from a single boolean flag. Only Claude Code's contract has actually been read here, so
+inventing a second shape would be guessing at someone else's interface — the same error as guessing a
+herdr flag. The flag still takes a harness rather than being a boolean, because it makes the host
+explicit and gives a divergence somewhere to land without a flag change.
+
+**The presets table is generated**, from the same `PresetList` the `presets` command renders, so what
+the brief says about presets cannot disagree with what `spawn --preset` will do.
+
+**`--json` prints the plain brief** — the crate's one exception to its own output contract, carried by
+`Cmd::TEXT_IN_BOTH_MODES`, which only `prime` overrides. A brief is a document; a JSON envelope around
+prose buys escaping and no information. Failures stay JSON under `--json` for every command, because a
+consumer branching on failures needs the tag whatever the command was.
+
+Four tests hold the hand-written part honest, since a static text blob is otherwise the least-tested
 artifact here:
 
-1. Every flag the prose names still exists somewhere in the clap tree. It cannot catch a flag
-   attributed to the wrong command; with four commands, that is what reading the prose is for. The
-   assertion that the extracted flag set is *non-empty* is load-bearing — the prose backticks its
-   flags, so a token arrives as ``​`--placement`` and the test passes vacuously if the trimming
-   breaks.
-2. Every exit code the prose teaches matches `ExitStatus`, asserted against the *current* number so a
-   renumbering fails here rather than leaving an agent retrying on a code that stopped meaning
-   retryable.
-3. The prose stays inside a forty-line budget, so the discipline survives later edits. The budget
-   covers the prose only: the preset table's length belongs to whoever wrote the config.
+1. **The brief names exactly the commands that exist**, in both directions. A command renamed out from
+   under the brief fails one way; a command *added* without being documented fails the other, and that
+   is the one that would otherwise go unnoticed — an agent cannot reach for what the brief never
+   mentions.
+2. **Every flag it names still exists** somewhere in the clap tree. It cannot catch a flag attributed
+   to the wrong command; with five commands, that is what reading the brief is for. Two details are
+   load-bearing: global flags live on the *root*, not on the subcommands clap propagates them to, which
+   is what made a first version reject `--json`; and the assertion that the extracted set is *non-empty*
+   is what stops the test passing vacuously when the trimming breaks, which it did.
+3. **Every exit code it tabulates is one the contract reports.** Asserted in that direction rather than
+   the reverse: a first version checked that each status *appeared* and passed a renumbering, because
+   the brief names the retryable code twice and `contains` was satisfied by the mention that had not
+   changed. Only rows whose first token is a bare integer are read, so a `--timeout` default in
+   milliseconds is not mistaken for a status.
+4. **The brief stays inside an eighty-line budget.** Raised from forty when it became command blocks
+   instead of paragraphs — runnable lines earn their length in a way explanation does not. Still a
+   ceiling, and it covers the hand-written part only: the preset table's length belongs to whoever wrote
+   the config.
 
-The draft, whose synopsis block the generated index replaced:
+Each was verified by mutation rather than by assuming it would fire; two of them did not, and are the
+reason the notes above are specific.
+
+The first draft, kept for the record — its synopsis and its explanatory shape are both superseded:
 
 ```text
 herdr-agent-tools launches and prompts herdr agents. Reach for it instead of `herdr` when

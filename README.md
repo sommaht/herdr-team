@@ -16,6 +16,11 @@ on stdin.
 | `presets` | List what the preset config holds |
 | `prime` | Print an agent-facing brief on driving this CLI |
 
+`prime` is written for a session-start hook. `--hook <harness>` asks that harness to wrap the brief
+in its host's envelope; each harness owns its own shape, so a host whose contract differs is one impl
+rather than a flag change. It makes no herdr call and a config it cannot read costs the preset table
+and nothing else, because a hook that fails is worse than one that says little.
+
 ```
 herdr-agent-tools spawn reviewer --placement tab --preset opus --prompt "Review the branch"
 git diff | herdr-agent-tools prompt reviewer -
@@ -58,6 +63,14 @@ Human-readable text by default: results on stdout, diagnostics on stderr. `--jso
 NDJSON — one object per line, all on stdout, each carrying a `type` of `result`, `warning`, or
 `error`. Everything shares one stream because a consumer cannot rely on two streams' relative
 ordering once either is redirected.
+
+Text is the default rather than JSON because the output is usually *read*, including by an agent. A
+`spawn` prints `reviewer (claude) → w4:p9`; its JSON form nests herdr's whole agent record, which is
+what a pipeline wants and roughly twenty-five times the size for the same actionable fact.
+
+`prime` is the one exception: `--json` prints the same brief as no flag at all. Its result is a
+document, and wrapping prose in an envelope buys escaping and no information. Failures are still JSON
+under `--json` for every command, `prime` included.
 
 ## Exit codes
 

@@ -1,9 +1,11 @@
-//! What this tool knows about each supported agent CLI: whether it can be prompted right now.
+//! What this tool knows about each supported agent CLI: whether it can be prompted right now, and how
+//! it wants context handed to it at session start.
 //!
 //! A caller asks [`readiness`] one question and learns nothing about how it was answered. That it
 //! takes a terminal snapshot, which snapshot, and how much of one, are this module's business — a
 //! command that knew those would have to be edited every time a harness needed something different
-//! to look at.
+//! to look at. [`AgentHarness::hook`] is the same bargain for the other direction: `prime` hands over
+//! a brief and a harness says how its host wants it wrapped.
 //!
 //! Touches no process and no pane. [`readiness`] is handed the *means* to read and decides what to
 //! ask for, so the I/O stays in [`crate::herdr`] and a test supplies a closure returning a literal.
@@ -19,10 +21,35 @@ mod codex;
 
 use claude::ClaudeCode;
 use codex::Codex;
+use serde::Serialize;
 
 // =====================================================================================================================
 // Harness
 // =====================================================================================================================
+
+/// The hook event a brief answers. One value today, named rather than spelled inline.
+const SESSION_START: &str = "SessionStart";
+
+/// The hook envelope a host parses from stdout.
+///
+/// A serde struct rather than a hand-assembled string, so the brief is escaped by the same code that
+/// escapes everything else. It holds quotes, backticks, and newlines, and hand-rolling that escaping
+/// is how a hook ends up receiving invalid JSON.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HookEnvelope<'a> {
+    hook_specific_output: HookPayload<'a>,
+}
+
+/// What the envelope carries.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HookPayload<'a> {
+    /// The event this answers.
+    hook_event_name: &'static str,
+    /// The brief, which the host injects into the session's context.
+    additional_context: &'a str,
+}
 
 /// What a harness needs read from a target before it can judge readiness.
 ///
@@ -52,16 +79,38 @@ impl Default for Probe {
 /// restating it here would drift. An entry buys one thing — the ability to read that harness's
 /// composer — and a kind absent from it still gets a check through the probe tier in [`readiness`].
 ///
-/// Both judgment methods have defaults, so an impl states only what makes it different. Today that
-/// is one character; the deferred placeholder-vs-typed-text work overrides
-/// [`composer_occupied`](Self::composer_occupied), and a harness that renders its composer somewhere
-/// else overrides [`probe`](Self::probe).
-pub trait AgentHarness {
+/// Every method but the two below has a default, so an impl states only what makes it different. Today
+/// that is one character; the deferred placeholder-vs-typed-text work overrides
+/// [`composer_occupied`](Self::composer_occupied), a harness that renders its composer somewhere else
+/// overrides [`probe`](Self::probe), and a host whose hook contract diverges overrides
+/// [`hook`](Self::hook).
+pub trait AgentHarness: std::fmt::Debug {
     /// herdr's own kind label for this harness, as `agent get` reports it.
     fn kind(&self) -> &'static str;
 
     /// The character this harness's composer input begins after.
     fn marker(&self) -> char;
+
+    /// `context` wrapped the way this harness's host wants it delivered at session start.
+    ///
+    /// Defaulted to the `SessionStart` envelope, which is what every host known here reads today — the
+    /// same one shape the tool this borrows the idea from emits for all of its supported hosts. The
+    /// default is deliberate rather than lazy: inventing a second shape for a host whose contract has
+    /// not been read would be guessing at someone else's interface, and the override is here for the
+    /// day one is read and found to differ.
+    ///
+    /// # Errors
+    ///
+    /// [`serde_json::Error`] if the envelope cannot be serialized, which two string fields cannot
+    /// provoke — the signature carries it rather than panicking on a case that would be a bug here.
+    fn hook(&self, context: &str) -> Result<String, serde_json::Error> {
+        serde_json::to_string(&HookEnvelope {
+            hook_specific_output: HookPayload {
+                hook_event_name: SESSION_START,
+                additional_context: context,
+            },
+        })
+    }
 
     /// What this harness needs read in order to answer.
     ///
@@ -88,9 +137,19 @@ pub const HARNESSES: [&dyn AgentHarness; 2] = [&ClaudeCode, &Codex];
 
 /// Resolves herdr's kind label back to the harness that reads it.
 ///
-/// `None` for a kind this build does not know, which is the common case — the caller then probes.
-fn by_kind(kind: &str) -> Option<&'static dyn AgentHarness> {
+/// `None` for a kind this build does not know, which is the common case for [`readiness`] — the caller
+/// then probes. A caller that *named* a harness rather than reading one off a pane treats `None` as a
+/// bad argument instead.
+pub fn by_kind(kind: &str) -> Option<&'static dyn AgentHarness> {
     HARNESSES.into_iter().find(|harness| harness.kind() == kind)
+}
+
+/// Every kind a caller may name, for spelling the choices in a rejection.
+///
+/// Derived from [`HARNESSES`] rather than listed, so adding a harness cannot leave an error message
+/// advertising one set of names while [`by_kind`] accepts another.
+pub fn kinds() -> Vec<&'static str> {
+    HARNESSES.into_iter().map(AgentHarness::kind).collect()
 }
 
 // =====================================================================================================================
