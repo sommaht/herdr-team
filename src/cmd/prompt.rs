@@ -38,6 +38,7 @@ const DEFAULT_TIMEOUT_MS: u64 = 15_000;
 #[command(after_help = "Examples:\n  \
     herdr-agent-tools prompt reviewer \"run the test suite and report failures\"\n  \
     git diff | herdr-agent-tools prompt reviewer -\n  \
+    herdr-agent-tools prompt dispatcher --no-reply \"done: 4 flags are undocumented\"\n  \
     herdr-agent-tools prompt w4:p17 \"go\" --wait-until idle --timeout 120000")]
 pub struct PromptArgs {
     /// The agent to prompt: a herdr pane id, or a unique agent name.
@@ -64,6 +65,14 @@ pub struct PromptArgs {
     #[arg(long)]
     no_verify: bool,
 
+    /// Omit the reply instructions, closing the loop instead of inviting an answer.
+    #[arg(long, conflicts_with = "reply_to")]
+    no_reply: bool,
+
+    /// Address the reply instructions at this target instead of at the sender.
+    #[arg(long, value_name = "TARGET")]
+    reply_to: Option<String>,
+
     /// Send even if the target's composer holds unsent text.
     #[arg(long)]
     force: bool,
@@ -89,6 +98,17 @@ impl PromptArgs {
     /// Whether the composer guard runs.
     fn guarded(&self) -> bool {
         !self.force
+    }
+
+    /// Where this message says a reply should go.
+    ///
+    /// The two flags conflict at parse time, so the order these arms are read in cannot matter.
+    fn reply(&self) -> Reply {
+        match (&self.reply_to, self.no_reply) {
+            (Some(target), _) => Reply::To(target.clone()),
+            (None, true) => Reply::None,
+            (None, false) => Reply::ToSender,
+        }
     }
 }
 
@@ -130,7 +150,7 @@ impl Cmd for PromptArgs {
             ));
         }
 
-        let agent = deliver(&self.target, &self.text, &Reply::ToSender, wait.as_ref(), sink)?;
+        let agent = deliver(&self.target, &self.text, &self.reply(), wait.as_ref(), sink)?;
         Ok(Delivered { delivered: Some(verified), agent })
     }
 }
@@ -305,6 +325,45 @@ mod tests {
         assert!(parse(&["prompt", "reviewer", "go", "--force"]).wait().is_some());
         assert!(!parse(&["prompt", "reviewer", "go", "--force"]).guarded());
         assert!(parse(&["prompt", "reviewer", "go", "--no-verify"]).guarded());
+    }
+
+    #[test]
+    fn a_prompt_addresses_its_reply_at_the_sender_by_default() {
+        assert_eq!(parse(&["prompt", "reviewer", "go"]).reply(), Reply::ToSender);
+    }
+
+    #[test]
+    fn no_reply_produces_a_message_that_closes_the_loop() {
+        // The tail hands the replier this flag, so termination needs no memory: the replier runs the
+        // line it was given rather than recalling a convention.
+        assert_eq!(parse(&["prompt", "reviewer", "done", "--no-reply"]).reply(), Reply::None);
+    }
+
+    #[test]
+    fn reply_to_addresses_a_collector_rather_than_the_sender() {
+        assert_eq!(
+            parse(&["prompt", "worker", "go", "--reply-to", "collector"]).reply(),
+            Reply::To("collector".to_owned())
+        );
+    }
+
+    #[test]
+    fn no_reply_and_reply_to_are_refused_together_rather_than_one_silently_winning() {
+        // One names an address the other deletes, so passing both is a caller that has not decided.
+        // clap answers this with its own usage code, which is the 2 this crate's contract already uses.
+        assert!(
+            Harness::try_parse_from(["prompt", "reviewer", "go", "--no-reply", "--reply-to", "collector"])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn the_reply_flags_are_independent_of_the_delivery_flags() {
+        // --no-reply shapes the message; --no-verify skips the delivery wait; --force skips the
+        // composer guard. No one of them implies another.
+        let args = parse(&["prompt", "reviewer", "go", "--no-reply"]);
+        assert!(args.wait().is_some());
+        assert!(args.guarded());
     }
 
     #[test]
