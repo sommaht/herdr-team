@@ -18,7 +18,7 @@ use serde::Serialize;
 use thiserror::Error;
 
 use crate::cmd::prompt::deliver;
-use crate::cmd::prompt::envelope::Reply;
+use crate::cmd::prompt::envelope::{OPERATOR, Reply};
 use crate::cmd::{AsExitStatus, Cmd, ExitStatus};
 use crate::config::{ConfigError, Presets};
 use crate::core::{AgentName, Backoff, NonEmptyText, PaneId, Sink};
@@ -245,6 +245,10 @@ impl Cmd for SpawnArgs {
     /// Pre-checks, preset, surface, agent, first prompt — in that order, because a pre-check that
     /// runs after a surface exists is not a pre-check.
     fn execute(self, sink: &Sink) -> Result<Self::Ok, Self::Err> {
+        // `AgentName` derefs to `str`, so this compares the name itself rather than the newtype.
+        if &*self.name == OPERATOR {
+            return Err(SpawnError::ReservedName);
+        }
         self.check_worktree_flags()?;
         let anchor = match self.placement {
             Placement::Pane => Some(anchor(std::env::var(PANE_VARIABLE).ok().as_deref())?),
@@ -415,6 +419,9 @@ pub enum SpawnError {
          use --placement tab, workspace, or worktree"
     )]
     MissingAnchor,
+    /// The agent name is the one reserved to mark a human sender.
+    #[error("'{OPERATOR}' is reserved: it marks a human sender in delivered mail")]
+    ReservedName,
     /// `--branch` or `--base` under a placement that makes no worktree.
     #[error("{flag} needs --placement worktree")]
     WorktreeOnlyFlag {
@@ -468,7 +475,7 @@ impl SpawnError {
 impl AsExitStatus for SpawnError {
     fn exit_status(&self) -> ExitStatus {
         match self {
-            Self::MissingAnchor | Self::WorktreeOnlyFlag { .. } => ExitStatus::Usage,
+            Self::MissingAnchor | Self::WorktreeOnlyFlag { .. } | Self::ReservedName => ExitStatus::Usage,
             Self::Config(error) => error.exit_status_hint(),
             Self::NoWorkingDirectory(_) => ExitStatus::Failure,
             Self::Herdr(error) => error.exit_status(),
@@ -485,6 +492,7 @@ impl AsExitStatus for SpawnError {
             Self::AfterSurface { error, .. } => error.herdr(),
             Self::MissingAnchor
             | Self::WorktreeOnlyFlag { .. }
+            | Self::ReservedName
             | Self::Config(_)
             | Self::NoWorkingDirectory(_)
             | Self::PaneNeverSettled { .. } => None,
@@ -651,6 +659,27 @@ mod tests {
     fn a_name_herdr_would_refuse_fails_at_parse_time_before_any_surface_exists() {
         assert!(Harness::try_parse_from(["spawn", "Reviewer"]).is_err());
         assert!(Harness::try_parse_from(["spawn", "1st"]).is_err());
+    }
+
+    #[test]
+    fn the_operator_name_is_refused_so_a_human_sender_cannot_be_impersonated() {
+        let error = SpawnError::ReservedName;
+
+        assert_eq!(error.exit_status(), ExitStatus::Usage);
+        assert_eq!(
+            error.to_string(),
+            "'operator' is reserved: it marks a human sender in delivered mail"
+        );
+    }
+
+    /// The reservation is this crate's rule, not herdr's, and the type that mirrors herdr stays clean.
+    ///
+    /// `AgentName` restates herdr's rule and its rejection names herdr as the authority. A reservation
+    /// herdr does not have would make it refuse a name herdr accepts and blame herdr for it — the exact
+    /// disagreement the "validate only what herdr won't" rule exists to prevent.
+    #[test]
+    fn the_reservation_lives_in_spawn_rather_than_in_the_name_type() {
+        assert!("operator".parse::<crate::core::AgentName>().is_ok());
     }
 
     #[test]
