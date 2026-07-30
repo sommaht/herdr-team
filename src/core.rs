@@ -1,9 +1,9 @@
 //! What every other module shares, and deliberately little.
 //!
-//! Three primitives and the output seam. This is the only module here with no dependency on the
-//! others' vocabulary, which is the property that keeps it a leaf: `herdr` reads into these types
-//! and writes from them, `harness` answers about a snapshot without naming any of them, and `cmd`
-//! executes against all of it.
+//! Three primitives, a retry schedule, and the output seam. This is the only module here with no
+//! dependency on the others' vocabulary, which is the property that keeps it a leaf: `herdr` reads
+//! into these types and writes from them, `harness` answers about a snapshot without naming any of
+//! them, and `cmd` executes against all of it.
 //!
 //! There is no execution context and no target-resolution layer. herdr resolves agent targets
 //! server-side — `agent prompt <target>` takes a pane id or a unique agent name and answers
@@ -11,8 +11,10 @@
 //! only by holding a read every command answers from, and there is none. Loading anything eagerly
 //! would also be wrong: a malformed preset file would then break `prompt`, which never reads one.
 
+mod backoff;
 mod sink;
 
+pub use backoff::Backoff;
 pub use sink::{OutputMode, Sink};
 
 use std::borrow::Cow;

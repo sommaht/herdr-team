@@ -4,21 +4,13 @@
 //! placements, each of which can fail after the previous one has already changed something in herdr.
 //! It reads as one transaction, so splitting it would hide that ordering and it stays one file.
 //!
-//! **RS-033 answered rather than waived.** This sits just over the prompt's line count and has crossed
-//! it in both directions, so here is the standing answer. Two candidates to move, and neither is worth
-//! it yet:
-//!
-//! - [`Backoff`] is genuinely separable, and has one consumer twenty lines above it.
-//! - [`anchor`] and [`SpawnArgs::workspace`] together answer "where is the caller", which is a real
-//!   boundary rather than a line-count one — it is the thing a `--from` flag would override. Until
-//!   something other than this flow asks that question, they are steps of the flow directly above
-//!   them, and a reader following `execute` finds them where they are used.
-//!
-//! The trigger is a second caller, not a line count. `--from` landing is what moves the second pair.
+//! [`anchor`] and [`SpawnArgs::workspace`] together answer "where is the caller", which is a real
+//! boundary rather than a line-count one — it is what a `--from` flag would override, and that is the
+//! day they move. Until something other than this flow asks that question they are steps of the flow
+//! directly above them, and a reader following `execute` finds them where they are used.
 
 use std::fmt::Display;
 use std::path::PathBuf;
-use std::time::Duration;
 
 use clap::Args;
 use clap_stdin::MaybeStdin;
@@ -28,7 +20,7 @@ use thiserror::Error;
 use crate::cmd::prompt::deliver;
 use crate::cmd::{AsExitStatus, Cmd, ExitStatus};
 use crate::config::{ConfigError, Presets};
-use crate::core::{AgentName, NonEmptyText, PaneId, Sink};
+use crate::core::{AgentName, Backoff, NonEmptyText, PaneId, Sink};
 use crate::herdr::agent::{self, AgentRecord, WORKING, Wait};
 use crate::herdr::surface::{self, Focus, Placement};
 use crate::herdr::{HerdrError, HerdrRef};
@@ -46,12 +38,6 @@ const PANE_VARIABLE: &str = "HERDR_PANE_ID";
 /// pane that has not reached its prompt. Ten seconds covers a shell running a directory-environment
 /// hook without leaving a caller hanging on one that is genuinely broken.
 const DEFAULT_SETTLE_MS: u64 = 10_000;
-
-/// The first retry delay, in milliseconds.
-const BACKOFF_FIRST_MS: u64 = 250;
-
-/// The longest a single retry waits, in milliseconds.
-const BACKOFF_CAP_MS: u64 = 2_000;
 
 // =====================================================================================================================
 // Spawn Args
@@ -238,7 +224,7 @@ impl SpawnArgs {
     /// skips. What a caller needs is the case where retrying did not help, and
     /// [`SpawnError::PaneNeverSettled`] carries that with the budget it exhausted.
     fn start_when_settled(&self, pane: &PaneId, kind: &str, agent_args: &[String]) -> Result<AgentRecord, SpawnError> {
-        for delay in backoff(self.settle_timeout) {
+        for delay in Backoff::within(self.settle_timeout) {
             match agent::start(&self.name, kind, pane, agent_args) {
                 Ok(agent) => return Ok(agent),
                 Err(error) if error.code() == Some("agent_pane_busy") => std::thread::sleep(delay),
@@ -384,53 +370,12 @@ fn anchor(variable: Option<&str>) -> Result<PaneId, SpawnError> {
         .ok_or(SpawnError::MissingAnchor)
 }
 
-/// The delays a `agent_pane_busy` retry spends waiting, inside `budget_ms`.
-///
-/// Doubles from 250ms to a 2000ms cap, with the last delay shortened so the total lands exactly on
-/// the budget rather than overrunning it. An empty schedule means one attempt and no retry.
-fn backoff(budget_ms: u64) -> Backoff {
-    Backoff {
-        remaining_ms: budget_ms,
-        next_ms: BACKOFF_FIRST_MS,
-    }
-}
-
-/// The retry schedule as a sequence: doubling delays, capped, and truncated so the total never
-/// overruns the budget.
-///
-/// An iterator rather than a collected `Vec`, because the sequence is state and a step's length
-/// depends on what is left — expressing it as `next` puts the doubling, the cap, and the truncation
-/// in one place, and the caller consumes it lazily inside its retry loop rather than paying for a
-/// schedule it will usually abandon on the second attempt.
-struct Backoff {
-    /// Budget not yet handed out; the sequence ends when it reaches zero.
-    remaining_ms: u64,
-    /// The delay this step would like, before it is truncated to what remains.
-    next_ms: u64,
-}
-
-impl Iterator for Backoff {
-    type Item = Duration;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.remaining_ms == 0 {
-            return None;
-        }
-        let step = self.next_ms.min(self.remaining_ms);
-        self.remaining_ms -= step;
-        self.next_ms = self.next_ms.saturating_mul(2).min(BACKOFF_CAP_MS);
-        Some(Duration::from_millis(step))
-    }
-}
-
 // =====================================================================================================================
 // Tests
 // =====================================================================================================================
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
     use clap::Parser;
 
     use super::*;
@@ -517,32 +462,21 @@ mod tests {
         assert!(anchor(Some("   ")).is_err(), "a blank variable is as good as unset");
     }
 
+    /// The settle window is spent on a schedule this file no longer owns.
+    ///
+    /// [`Backoff`]'s own tests cover the doubling, the cap, and landing exactly on the budget. What is
+    /// spawn's is the *policy*: which failure is worth retrying, and how long to keep at it — and the
+    /// one attempt after the schedule runs out, so a zero `--settle-timeout` still tries once. That
+    /// last part is not tested here, because proving it needs a herdr that refuses on demand and no
+    /// test in this crate invokes herdr.
     #[test]
-    fn the_retry_window_backs_off_and_lands_exactly_on_its_budget() {
-        // 250ms doubling to a 2000ms cap, truncated so the total never overruns --settle-timeout.
-        let delays: Vec<u64> = backoff(10_000).map(|delay| delay.as_millis() as u64).collect();
-
-        assert_eq!(delays, [250, 500, 1000, 2000, 2000, 2000, 2000, 250]);
-        assert_eq!(delays.iter().sum::<u64>(), 10_000);
-    }
-
-    #[test]
-    fn a_zero_budget_means_one_attempt_and_no_retry() {
-        assert_eq!(backoff(0).next(), None);
-        assert_eq!(backoff(100).collect::<Vec<_>>(), [Duration::from_millis(100)]);
+    fn the_settle_window_is_the_default_unless_a_caller_narrows_it() {
+        assert_eq!(parse(&["spawn", "reviewer"]).settle_timeout, DEFAULT_SETTLE_MS);
         assert_eq!(
-            backoff(300).collect::<Vec<_>>(),
-            [Duration::from_millis(250), Duration::from_millis(50)]
+            parse(&["spawn", "reviewer", "--settle-timeout", "0"]).settle_timeout,
+            0,
+            "a caller that wants no retry at all can say so"
         );
-    }
-
-    /// The schedule is lazy: a retry loop that succeeds early pays for no delay it did not use.
-    #[test]
-    fn the_schedule_is_produced_a_step_at_a_time() {
-        let mut delays = backoff(10_000);
-        assert_eq!(delays.next(), Some(Duration::from_millis(250)));
-        assert_eq!(delays.next(), Some(Duration::from_millis(500)));
-        // The remaining 9_250ms is never computed, because nothing asked for it.
     }
 
     #[test]
