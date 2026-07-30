@@ -3,7 +3,9 @@
 //! There is deliberately no parent grouping: three sibling commands share no distinction a parent
 //! would mark.
 
-#![allow(dead_code, reason = "the commands land in Tasks 6, 10, and 11")]
+mod presets;
+
+pub use presets::PresetsArgs;
 
 use std::fmt::Display;
 

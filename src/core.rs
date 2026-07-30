@@ -15,7 +15,6 @@
 
 mod sink;
 
-#[allow(unused_imports, reason = "`OutputMode`'s first caller is `main`, in Task 6")]
 pub use sink::{OutputMode, Sink};
 
 use std::borrow::Cow;
