@@ -13,6 +13,11 @@
 
 #![allow(dead_code, reason = "the first callers land in Tasks 6 through 11")]
 
+mod sink;
+
+#[allow(unused_imports, reason = "the sink's first caller lands in Task 4")]
+pub use sink::{OutputMode, Sink};
+
 use std::borrow::Cow;
 use std::str::FromStr;
 
