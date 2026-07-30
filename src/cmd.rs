@@ -37,6 +37,11 @@ pub trait Cmd {
     /// caller that habitually passes `--json` is better served the brief than a single escaped string.
     /// Everything else has fields worth flattening, so the default is `false`.
     ///
+    /// An exception a consumer cannot discover is a trap, so this one is stated three times over: in
+    /// `--json`'s own help, in `prime --help`, and in the brief. `--help` and `--version` print as
+    /// documents for the same reason, without needing a flag here — clap answers those before a
+    /// command is chosen.
+    ///
     /// Only the *result* is affected. A failure is still JSON under `--json`, because a consumer
     /// branching on failures needs the tag and the status whatever the command was.
     const TEXT_IN_BOTH_MODES: bool = false;

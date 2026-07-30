@@ -65,7 +65,7 @@ pub fn run_text(args: &[String]) -> Result<String, HerdrError> {
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     } else {
-        Err(classify(command_name(args), &output.stderr))
+        Err(classify(command_name(args), &output.stderr, output.status.code()))
     }
 }
 
@@ -117,6 +117,12 @@ pub enum HerdrError {
         command: String,
         /// herdr's first line of stderr.
         message: String,
+        /// herdr's own process exit status, absent when a signal ended it.
+        ///
+        /// Kept because it is the only thing that separates herdr rejecting the argument vector
+        /// this crate handed it from herdr failing at the work — see
+        /// [`exit_status`](HerdrError::exit_status).
+        status: Option<i32>,
     },
     /// herdr succeeded but printed something this call could not read.
     ///
@@ -147,9 +153,19 @@ impl HerdrError {
     /// unrecognized code is a general failure, not a compile error. herdr grows codes, and a match
     /// that had to be exhaustive over them would be a second copy of herdr's vocabulary.
     ///
+    /// The one thing read before the code is herdr's own exit status, and only the value that means
+    /// the same thing on both sides of the seam. herdr answers a bad argument the way this crate
+    /// does — a plain line and exit 2, with no error object and so no code — and every argument in
+    /// the vector it rejected came from a flag this crate's caller set. Forwarding it keeps
+    /// `--wait-until nonsense` a usage error rather than an operational one, which is a distinction
+    /// a caller branching on the contract acts on.
+    ///
     /// A plain method rather than an [`AsExitStatus`](crate::cmd::AsExitStatus) impl, because every
     /// command wraps this in an enum of its own and all of them delegate here.
     pub fn exit_status(&self) -> ExitStatus {
+        if let Self::Failed { status: Some(2), .. } = self {
+            return ExitStatus::Usage;
+        }
         match self.code() {
             Some("agent_target_ambiguous") => ExitStatus::Usage,
             Some("agent_not_found" | "agent_pane_not_found" | "pane_not_found") => ExitStatus::NotFound,
@@ -220,8 +236,8 @@ fn command_name(args: &[String]) -> String {
 /// Reads herdr's stderr into a typed failure.
 ///
 /// herdr's error object is `{"error":{"code":…,"message":…}}`; anything else is a client-side
-/// refusal it printed as a plain line.
-fn classify(command: String, stderr: &[u8]) -> HerdrError {
+/// refusal it printed as a plain line, and there `status` is the only classification there is.
+fn classify(command: String, stderr: &[u8], status: Option<i32>) -> HerdrError {
     #[derive(serde::Deserialize)]
     struct Reported {
         error: Body,
@@ -241,7 +257,11 @@ fn classify(command: String, stderr: &[u8]) -> HerdrError {
         },
         // RS-002: the parse failure says nothing useful about a line that was never JSON, and the
         // replacement carries strictly more — herdr's own words.
-        Err(_) => HerdrError::Failed { command, message: first_line(&text) },
+        Err(_) => HerdrError::Failed {
+            command,
+            message: first_line(&text),
+            status,
+        },
     }
 }
 
@@ -288,7 +308,7 @@ mod tests {
     fn a_json_error_object_becomes_a_refusal_carrying_herdrs_code_and_message_verbatim() {
         let stderr = br#"{"id":"cli:agent:start","error":{"code":"agent_pane_busy","message":"agent target pane w4:p16 is not an available shell"}}"#;
 
-        let error = classify("agent start".to_owned(), stderr);
+        let error = classify("agent start".to_owned(), stderr, Some(1));
 
         assert_eq!(error.code(), Some("agent_pane_busy"));
         // The Display form *is* herdr's message; nothing re-words it.
@@ -297,21 +317,46 @@ mod tests {
 
     #[test]
     fn stderr_that_is_not_a_json_error_object_becomes_a_plain_failure_naming_the_command() {
-        // herdr refuses some things client-side with a plain line and exit 2 — an unsupported kind,
-        // a missing flag. Those carry no code, so they map to a general failure.
-        let error = classify("agent start".to_owned(), b"unsupported interactive agent kind: clawd\n");
+        // herdr refuses some things client-side with a plain line and no error object — an
+        // unsupported kind, a value its own parser rejects. Those carry no code, so the only
+        // classification left is the process status herdr exited with.
+        let error = classify(
+            "agent start".to_owned(),
+            b"unsupported interactive agent kind: clawd\n",
+            Some(2),
+        );
 
         assert_eq!(error.code(), None);
         assert_eq!(
             error.to_string(),
             "herdr agent start failed: unsupported interactive agent kind: clawd"
         );
-        assert_eq!(error.exit_status(), ExitStatus::Failure);
+    }
+
+    /// herdr's exit 2 is this crate's exit 2, because the argument vector it rejected was ours.
+    ///
+    /// The case that pays for it: `--wait-until nonsense` is forwarded unvalidated — herdr owns the
+    /// status vocabulary — and herdr's own parser rejects it. Reported as a general failure, an
+    /// agent branching on the contract retries its own bad argument as if it were operational.
+    #[test]
+    fn herdrs_own_argument_rejection_stays_a_usage_error_on_this_side_of_the_seam() {
+        let rejected = classify(
+            "agent prompt".to_owned(),
+            b"error: invalid value 'nonsense' for '--until <STATUS>'\n",
+            Some(2),
+        );
+        assert_eq!(rejected.exit_status(), ExitStatus::Usage);
+
+        // Every other status is herdr failing at the work rather than at the arguments.
+        for status in [Some(1), Some(3), None] {
+            let failed = classify("pane split".to_owned(), b"something broke\n", status);
+            assert_eq!(failed.exit_status(), ExitStatus::Failure, "{status:?}");
+        }
     }
 
     #[test]
     fn empty_stderr_still_produces_a_message() {
-        let error = classify("pane split".to_owned(), b"");
+        let error = classify("pane split".to_owned(), b"", Some(1));
 
         assert_eq!(error.to_string(), "herdr pane split failed: unknown error");
     }
@@ -386,6 +431,7 @@ mod tests {
         let plain = HerdrError::Failed {
             command: "pane split".to_owned(),
             message: "…".to_owned(),
+            status: Some(1),
         };
         assert_eq!(
             serde_json::to_string(&plain.reference()).unwrap(),

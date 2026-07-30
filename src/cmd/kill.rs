@@ -164,6 +164,13 @@ impl Liveness {
 #[derive(Debug, Serialize)]
 pub struct Killed {
     /// The pane that was closed.
+    ///
+    /// Renamed on the wire to the key every other pane id in this crate uses — herdr's own
+    /// `pane_id`, which `spawn` and `prompt` carry inside their nested agent record. This is the
+    /// only result with a pane at the top level, because it is the only one whose agent record may
+    /// be absent, and a second spelling for the same value would make a generic extractor special-
+    /// case one command.
+    #[serde(rename = "pane_id")]
     pane: PaneId,
     /// herdr's record of the agent that was in it, absent when the target hosted none.
     ///
@@ -322,7 +329,7 @@ mod tests {
         assert_eq!(killed.to_string(), "killed w4:p17 (reviewer, was idle)");
         assert_eq!(
             serde_json::to_string(&killed).unwrap(),
-            r#"{"pane":"w4:p17","agent":{"agent":"claude","agent_status":"idle","pane_id":"w4:p17","name":"reviewer"}}"#
+            r#"{"pane_id":"w4:p17","agent":{"agent":"claude","agent_status":"idle","pane_id":"w4:p17","name":"reviewer"}}"#
         );
     }
 
@@ -334,7 +341,7 @@ mod tests {
         };
 
         assert_eq!(killed.to_string(), "killed w4:p7 (no agent)");
-        assert_eq!(serde_json::to_string(&killed).unwrap(), r#"{"pane":"w4:p7"}"#);
+        assert_eq!(serde_json::to_string(&killed).unwrap(), r#"{"pane_id":"w4:p7"}"#);
     }
 
     #[test]

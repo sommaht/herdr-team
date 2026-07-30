@@ -86,7 +86,10 @@ pub struct SpawnArgs {
     config: Option<PathBuf>,
 
     /// A first prompt to deliver once the agent is up; `-` reads it from stdin.
-    #[arg(long, value_name = "TEXT")]
+    // `allow_hyphen_values` for the reason given on `prompt`'s own text argument: a prompt opening
+    // with `--` must be delivered rather than echoed back in a parser diagnostic. `--` cannot repair
+    // it here at all — that separator already belongs to `agent_args`.
+    #[arg(long, value_name = "TEXT", allow_hyphen_values = true)]
     prompt: Option<MaybeStdin<NonEmptyText>>,
 
     /// The directory this agent works on, or for a worktree the checkout it is cut from; defaults
@@ -279,10 +282,23 @@ impl SpawnArgs {
             until: vec![WORKING.to_owned()],
             timeout: DEFAULT_SETTLE_MS,
         };
+
+        // `prompt`'s honest gap, met here too: an agent that is already `working` matches
+        // `--until working` instantly, which proves nothing. Said out loud rather than left to the
+        // `delivered` field, which only the `--json` reader sees — a caller reading the one line
+        // would otherwise wait forever on work that was never proven to start.
+        let verified = started.status() != WORKING;
+        if !verified {
+            sink.warn(&format!(
+                "{} was already working when its first prompt was sent, so delivery could not be verified",
+                self.name
+            ));
+        }
+
         let agent = deliver(pane, text, Some(&wait), sink)?;
         Ok(Spawned {
             placement: self.placement,
-            delivered: Some(started.status() != WORKING),
+            delivered: Some(verified),
             worktree,
             agent,
         })
@@ -336,7 +352,8 @@ pub struct Spawned {
     ///
     /// Reported because the branch is usually herdr's to generate, which makes the response that
     /// created it the one cheap moment it is knowable. Without this a caller runs `worktree list`
-    /// against the source repo and then guesses which checkout is the one it just made.
+    /// against the source repo and then guesses which checkout is the one it just made. Both fields
+    /// reach the human line too — see this type's [`Display`].
     #[serde(skip_serializing_if = "Option::is_none")]
     worktree: Option<Checkout>,
     /// herdr's agent record, nested verbatim.
@@ -352,10 +369,15 @@ impl Display for Spawned {
             self.agent.kind().unwrap_or("unknown"),
             self.agent.pane()
         )?;
-        // The branch, not the path: the path is long enough to bury the line, and the JSON carries
-        // both for anyone who needs to `cd` there.
-        if let Some(branch) = self.worktree.as_ref().and_then(|checkout| checkout.branch.as_deref()) {
-            write!(f, " [{branch}]")?;
+        // Both halves of the checkout, because both are answers only this response holds: the branch
+        // is usually herdr's to generate, and the path is where a caller has to `cd` to work in it.
+        // The line is longer for it, and a re-query the caller cannot make cheaply is worse. The
+        // branch may be absent, so the path stands alone rather than leaving an empty bracket.
+        if let Some(checkout) = &self.worktree {
+            match &checkout.branch {
+                Some(branch) => write!(f, " [{branch} in {}]", checkout.path)?,
+                None => write!(f, " [{}]", checkout.path)?,
+            }
         }
         Ok(())
     }
@@ -539,6 +561,39 @@ mod tests {
         assert_eq!(parse(&["spawn", "reviewer", "--focus"]).focus(), Focus::Take);
     }
 
+    /// A first prompt that opens with a dash is delivered rather than rejected.
+    ///
+    /// The parse is the redaction: a value clap accepts is a value no clap diagnostic can repeat.
+    /// `--` is no repair here — it already belongs to `agent_args` — so this argument has to take
+    /// hyphen-leading text on its own.
+    #[test]
+    fn a_first_prompt_that_opens_with_a_dash_is_prompt_text_rather_than_a_flag() {
+        for text in ["--force the issue", "-e", "--focus"] {
+            let args = parse(&["spawn", "reviewer", "--prompt", text]);
+
+            assert_eq!(args.prompt.expect("a prompt was given").to_string(), text, "{text}");
+        }
+    }
+
+    #[test]
+    fn a_flag_after_the_first_prompt_is_still_a_flag() {
+        // `allow_hyphen_values` must claim this option's own value and nothing past it.
+        let args = parse(&[
+            "spawn",
+            "reviewer",
+            "--prompt",
+            "--go",
+            "--placement",
+            "tab",
+            "--",
+            "--resume",
+        ]);
+
+        assert_eq!(args.prompt.as_ref().expect("a prompt was given").to_string(), "--go");
+        assert_eq!(args.placement, Placement::Tab);
+        assert_eq!(args.agent_args, ["--resume"]);
+    }
+
     #[test]
     fn a_name_herdr_would_refuse_fails_at_parse_time_before_any_surface_exists() {
         assert!(Harness::try_parse_from(["spawn", "Reviewer"]).is_err());
@@ -663,8 +718,8 @@ mod tests {
     /// A worktree spawn reports the checkout, because nothing else will.
     ///
     /// The branch is herdr's to generate unless the caller named one, so this response is the one
-    /// cheap moment it is knowable. Human mode shows the branch alone — the path is long enough to
-    /// bury the line — and the JSON carries both.
+    /// cheap moment either half is knowable — and the path is what a caller has to `cd` to. Both
+    /// forms carry both.
     #[test]
     fn a_worktree_spawn_reports_the_branch_it_landed_on_and_the_path_beside_it() {
         let spawned = Spawned {
@@ -679,7 +734,7 @@ mod tests {
 
         assert_eq!(
             spawned.to_string(),
-            "reviewer (claude) → w4:p17 [worktree/lucky-harbor-8e01]"
+            "reviewer (claude) → w4:p17 [worktree/lucky-harbor-8e01 in /work/trees/repo/worktree-lucky-harbor-8e01]"
         );
         assert_eq!(
             serde_json::to_string(&spawned).unwrap(),
@@ -688,9 +743,9 @@ mod tests {
     }
 
     #[test]
-    fn a_worktree_with_no_branch_falls_back_to_the_plain_line_rather_than_an_empty_bracket() {
+    fn a_worktree_with_no_branch_reports_the_path_alone_rather_than_an_empty_bracket() {
         // herdr's branch field is optional, so the human line has to survive a `None` it does not
-        // expect rather than printing `[]`.
+        // expect. The path is the half that is always there, and it is the half a caller acts on.
         let spawned = Spawned {
             placement: Placement::Worktree,
             delivered: None,
@@ -701,7 +756,10 @@ mod tests {
             agent: record(),
         };
 
-        assert_eq!(spawned.to_string(), "reviewer (claude) → w4:p17");
+        assert_eq!(
+            spawned.to_string(),
+            "reviewer (claude) → w4:p17 [/work/trees/repo/detached]"
+        );
     }
 
     #[test]
