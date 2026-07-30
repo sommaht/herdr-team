@@ -149,6 +149,22 @@ pub fn open_at(pane: &PaneId, directory: &str) -> Result<(), HerdrError> {
     Ok(())
 }
 
+/// The root of the repository herdr resolves for `cwd`, answered from any directory inside it.
+///
+/// Read before a worktree is cut, so `spawn` can work out where the caller sits inside its
+/// repository and reopen the new checkout's pane at the same place. One read-only call, and no `git`
+/// process — which is what keeps the rule that nothing outside this module spawns one.
+///
+/// # Errors
+///
+/// Returns whatever [`run`] returned. `not_git_worktree` is the refusal worth expecting: `cwd` is
+/// not inside a repository at all, which `worktree create` would refuse a moment later anyway — and
+/// meeting it here is better, because nothing has been created yet.
+pub fn repo_root(cwd: &str) -> Result<String, HerdrError> {
+    let listed: WorktreeListed = run(&list_args(cwd))?;
+    Ok(listed.source.repo_root)
+}
+
 /// Closes a pane, taking whatever was running in it.
 ///
 /// The target is a `&str` rather than a [`PaneId`], unlike the three above: theirs come from the
@@ -211,6 +227,26 @@ pub struct Checkout {
     pub branch: Option<String>,
     /// The absolute path herdr put the checkout at.
     pub path: String,
+}
+
+/// `worktree list`'s result, read only for the repository its `--cwd` resolved to.
+///
+/// herdr also reports every worktree of that repository; serde drops what it is not asked for, and
+/// this call is made for one string.
+#[derive(Debug, Deserialize)]
+struct WorktreeListed {
+    source: WorktreeSource,
+}
+
+/// The one field a `worktree list` is made for here.
+///
+/// herdr's source object also carries `repo_key`, `repo_name`, `source_checkout_path` and
+/// `source_workspace_id`. `source_checkout_path` is the one worth naming as *not* read: it differs
+/// from `repo_root` only when the caller is inside a linked worktree, which is a source herdr
+/// refuses to cut from.
+#[derive(Debug, Deserialize)]
+struct WorktreeSource {
+    repo_root: String,
 }
 
 /// `pane get`'s result, read only for the workspace the pane sits in.
@@ -319,6 +355,14 @@ fn run_args(pane: &str, directory: &str) -> Vec<String> {
         pane.to_owned(),
         format!("cd -- {}", shell_quote(directory)),
     ]
+}
+
+/// `herdr worktree list --cwd <CWD>`.
+///
+/// `--cwd` is a directory rather than a repository root: herdr resolves the repository containing
+/// it, which is the whole reason this answers the question `spawn` has.
+fn list_args(cwd: &str) -> Vec<String> {
+    ["worktree", "list", "--cwd", cwd].map(str::to_owned).to_vec()
 }
 
 /// A path as one shell word: single-quoted, with an embedded `'` closed, escaped, and reopened.
@@ -564,6 +608,35 @@ mod tests {
         // No flags exist on herdr's side: `pane close` takes a pane id and acts. Every guard in front
         // of it is this crate's.
         assert_eq!(close_args("w4:p17"), ["pane", "close", "w4:p17"]);
+    }
+
+    #[test]
+    fn a_repository_lookup_asks_about_one_directory() {
+        // Any directory inside the repository answers, which is the property that makes this callable
+        // from wherever the caller happens to be standing.
+        assert_eq!(
+            list_args("/work/repo/src/api"),
+            ["worktree", "list", "--cwd", "/work/repo/src/api"]
+        );
+    }
+
+    /// A listing is read for one string, and everything else herdr says about the repository is dropped.
+    ///
+    /// `source_checkout_path` sits beside `repo_root` and is deliberately not the field read. The two
+    /// differ only when the caller is already inside a linked worktree, and herdr refuses to cut a
+    /// worktree from there — see [`create_worktree`].
+    #[test]
+    fn a_worktree_listing_is_read_for_the_repository_root_and_nothing_else() {
+        let listed: WorktreeListed = serde_json::from_str(
+            r#"{"type":"worktree_list",
+            "source":{"repo_key":"repo","repo_name":"repo","repo_root":"/work/repo",
+                      "source_checkout_path":"/work/repo","source_workspace_id":"w4"},
+            "worktrees":[{"path":"/work/repo","branch":"main","is_bare":false,"is_detached":false,
+                          "is_prunable":false,"is_linked_worktree":false,"label":"repo"}]}"#,
+        )
+        .unwrap();
+
+        assert_eq!(listed.source.repo_root, "/work/repo");
     }
 
     #[test]
