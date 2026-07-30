@@ -60,7 +60,7 @@ pub struct SpawnArgs {
     name: AgentName,
 
     /// Where the agent's pane comes from: a split of the calling pane, which needs `HERDR_PANE_ID`,
-    /// or the root pane of a new tab or workspace.
+    /// or the root pane of a new tab, workspace, or Git worktree cut from `--cwd`.
     // Not a doc comment: a field's doc comment on this struct is its `--help` text, and why the
     // default is a string is not something a caller needs. `default_value_t` would want a `Display`
     // on `Placement` whose only consumer is this line, and which has to agree with the value parser
