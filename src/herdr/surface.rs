@@ -91,8 +91,10 @@ pub fn create_workspace(label: &AgentName, cwd: &str, focus: Focus) -> Result<Pa
 /// Creates a Git worktree of `source`, labels its workspace `label`, and reports its root pane
 /// along with the checkout it opened on.
 ///
-/// `source` is the checkout the worktree is cut *from*, not where it lands — herdr chooses the
-/// checkout path itself, under the `worktree_directory` in its own config. `branch` and `base` are
+/// `source` is a directory inside the repository the worktree is cut *from*, not where it lands —
+/// herdr resolves the repository containing it, and chooses the checkout path itself under the
+/// `worktree_directory` in its own config. The root pane it returns always opens at the checkout
+/// root; reopening it deeper is [`open_at`]'s job and the caller's decision. `branch` and `base` are
 /// herdr's to default: it generates a `worktree/`-prefixed branch name for `None` and bases on
 /// `HEAD`, and restating either here would be a second authority to keep in step.
 ///
@@ -341,10 +343,10 @@ fn workspace_args(label: &str, cwd: &str, focus: Focus) -> Vec<String> {
 /// `herdr worktree create --cwd <SOURCE> [--branch <NAME>] [--base <REF>] --label <LABEL>
 /// --(no-)focus`.
 ///
-/// `--cwd` is passed on every call for the same reason `tab create` always names `--workspace`:
-/// omitting it makes herdr resolve the source to whichever workspace is *UI-focused*, so the
-/// worktree would be cut from whatever repository the human was last looking at. Here `--cwd` names
-/// the source checkout rather than the new surface's working directory, which herdr derives.
+/// `--cwd` here names a directory inside the repository to cut from — herdr resolves the repository
+/// containing it — rather than the new surface's working directory, which herdr derives and always
+/// puts at the checkout root. A caller that wants the agent deeper reopens the pane afterwards; see
+/// [`open_at`].
 ///
 /// `--branch` and `--base` are omitted entirely when the caller did not give them, so herdr applies
 /// its own defaults rather than ours.

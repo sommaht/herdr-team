@@ -98,8 +98,8 @@ pub struct SpawnArgs {
     #[arg(long, value_name = "TARGET")]
     reply_to: Option<String>,
 
-    /// The directory this agent works on, or for a worktree the checkout it is cut from; defaults
-    /// to the current one.
+    /// The directory this agent works on; defaults to the current one. A worktree spawn cuts from
+    /// the repository holding it and reopens at the same relative path inside the new checkout.
     #[arg(long, value_name = "PATH")]
     cwd: Option<PathBuf>,
 
@@ -957,6 +957,27 @@ mod tests {
     fn a_directory_that_only_looks_like_a_prefix_of_the_root_is_not_inside_it() {
         assert_eq!(relative_to("/work/repo", "/work/repository/src"), None);
         assert_eq!(relative_to("/work/repo", "/work/trees/repo-8e01/src"), None);
+    }
+
+    /// `--cwd` is where the agent works, under every placement.
+    ///
+    /// The old help said it meant the source checkout "for a worktree" — one flag with two meanings,
+    /// distinguished by another flag's value, which was the defect under the subdirectory bug rather
+    /// than a wording slip. Asserted as an absence because the replacement wording is prose that should
+    /// be free to improve.
+    #[test]
+    fn the_cwd_help_no_longer_claims_a_second_meaning_for_one_placement() {
+        let mut command = <Harness as clap::CommandFactory>::command();
+        let rendered = command.render_help().to_string();
+        // Collapsed to single spaces first: clap wraps help text to the terminal width, so a phrase
+        // asserted against the raw rendering can be split across two lines and pass vacuously.
+        let flattened = rendered.split_whitespace().collect::<Vec<&str>>().join(" ");
+
+        assert!(flattened.contains("--cwd"), "the flag is still there");
+        assert!(
+            !flattened.contains("the checkout it is cut from"),
+            "--cwd means where the agent works, for every placement: {flattened}"
+        );
     }
 
     /// Three of the four placements answer without asking herdr anything.
