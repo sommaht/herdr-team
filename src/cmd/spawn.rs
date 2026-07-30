@@ -90,6 +90,14 @@ pub struct SpawnArgs {
     #[arg(long, value_name = "TEXT", allow_hyphen_values = true)]
     prompt: Option<MaybeStdin<NonEmptyText>>,
 
+    /// Omit the first prompt's reply instructions, closing the loop instead of inviting an answer.
+    #[arg(long, conflicts_with = "reply_to")]
+    no_reply: bool,
+
+    /// Address the first prompt's reply instructions at this target instead of at the sender.
+    #[arg(long, value_name = "TARGET")]
+    reply_to: Option<String>,
+
     /// The directory this agent works on, or for a worktree the checkout it is cut from; defaults
     /// to the current one.
     #[arg(long, value_name = "PATH")]
@@ -138,6 +146,19 @@ impl SpawnArgs {
             return Ok(None);
         };
         Ok(Some(surface::workspace_of(pane.trim())?))
+    }
+
+    /// Where the first prompt says a reply should go.
+    ///
+    /// Repeated rather than shared with `prompt`: the two structs are clap parsers first, and a
+    /// flattened group would put both commands' flags in one help section for the sake of four
+    /// lines.
+    fn reply(&self) -> Reply {
+        match (&self.reply_to, self.no_reply) {
+            (Some(target), _) => Reply::To(target.clone()),
+            (None, true) => Reply::None,
+            (None, false) => Reply::ToSender,
+        }
     }
 
     /// Whether the new surface takes the user's focus.
@@ -293,7 +314,7 @@ impl SpawnArgs {
             ));
         }
 
-        let agent = deliver(pane, text, &Reply::ToSender, Some(&wait), sink)?;
+        let agent = deliver(pane, text, &self.reply(), Some(&wait), sink)?;
         Ok(Spawned {
             placement: self.placement,
             delivered: Some(verified),
@@ -590,6 +611,40 @@ mod tests {
         assert_eq!(args.prompt.as_ref().expect("a prompt was given").to_string(), "--go");
         assert_eq!(args.placement, Placement::Tab);
         assert_eq!(args.agent_args, ["--resume"]);
+    }
+
+    #[test]
+    fn a_first_prompt_addresses_its_reply_at_the_sender_by_default() {
+        assert_eq!(
+            parse(&["spawn", "worker", "--prompt", "audit the CLI"]).reply(),
+            Reply::ToSender
+        );
+    }
+
+    #[test]
+    fn a_fan_out_can_route_every_workers_report_at_one_collector() {
+        assert_eq!(
+            parse(&["spawn", "worker", "--prompt", "audit the CLI", "--reply-to", "collector"]).reply(),
+            Reply::To("collector".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_first_prompt_can_close_the_loop_like_any_other() {
+        assert_eq!(
+            parse(&["spawn", "worker", "--prompt", "fyi", "--no-reply"]).reply(),
+            Reply::None
+        );
+    }
+
+    #[test]
+    fn spawn_refuses_the_two_reply_flags_together_the_same_way_prompt_does() {
+        assert!(
+            Harness::try_parse_from([
+                "spawn", "worker", "--prompt", "go", "--no-reply", "--reply-to", "collector"
+            ])
+            .is_err()
+        );
     }
 
     #[test]
