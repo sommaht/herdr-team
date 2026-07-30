@@ -645,9 +645,140 @@ and it is a value type rather than a role carved out of one. It sits in `core` r
 under `spawn` because it knows nothing of herdr, agents, or panes; it is `Duration` arithmetic, which
 is what `core` is for. `prompt`'s re-send is the plausible second caller, if it ever grows a delay.
 
+## Amendment — `--placement worktree`
+
+**Status:** specified, not yet built. A fourth value for the flag the previous amendment introduced;
+everything that section says about the other three still holds.
+
+```
+spawn <NAME> [--placement pane|tab|workspace|worktree] [--branch <NAME>] [--base <REF>] …
+```
+
+A worktree is a fourth answer to the question `Placement` already asks — where does this agent's
+pane come from — so it is a variant rather than a `--worktree` bool sitting beside the flag. A bool
+would need `conflicts_with`, which fires even on an explicit `--placement workspace` and reports a
+pair where the value flag reports the whole set. That is the trade the previous amendment made in
+the other direction, and re-adding a bool would undo it in miniature.
+
+### What herdr does with it
+
+`worktree create` creates a *workspace*, so this placement is workspace-shaped. It answers
+`{workspace, tab, root_pane, worktree}`, and `root_pane.pane_id` is the field `tab create` and
+`workspace create` are already read for.
+
+```
+worktree create --cwd <CWD> [--branch <NAME>] [--base <REF>] --label <NAME> --(no-)focus
+```
+
+`--cwd` names the **source checkout**, not the new surface's working directory — herdr picks where
+the checkout lands, under its own `worktree_directory`. `spawn --cwd` still means what it meant,
+"the directory this agent works on"; only what herdr does with it differs, and the flag's value is
+unchanged.
+
+It is passed on every call and never omitted. Given neither `--cwd` nor `--workspace`, herdr
+resolves the source to the active workspace — the *focused* one. This is the third place in this
+crate where a herdr default depends on what the human last clicked, after `pane split --current`
+and `tab create` without `--workspace`. The second of those was fixed only after a rehearsal launch
+opened its tab in an unrelated project; here the cost would be worse than a misplaced surface, since
+a worktree would be cut from whichever repo the human happened to be looking at.
+
+### `--branch` and `--base`
+
+Pass-throughs with no default of this crate's own. herdr generates
+`worktree/<adjective>-<noun>-<hex>` for an absent branch and uses `HEAD` for an absent base;
+restating either here would be a second authority to keep in step, which is "propagate rather than
+restate" applied to defaults rather than to fields.
+
+A branch defaulting to the agent's name was considered and rejected, and the reasoning is the
+useful part. It reads far better afterwards — `worktree/reviewer` in `git branch` says who made it,
+where a generated slug says nothing — but it collides on reuse. `kill` closes a pane and never runs
+`worktree remove`, so the branch outlives the agent, and the second `spawn reviewer --placement
+worktree` fails at `git worktree add`. A command that works once and then stops is a worse failure
+than an opaque name, and the attribution it would buy is already carried by the label.
+
+`--path` is not exposed: herdr's `worktree_directory` config owns where checkouts land, and a caller
+overriding it per spawn is fighting their own configuration.
+
+`--label` is the agent's name, as it is for a tab and a workspace. It carries more weight here —
+with a generated branch, the workspace label is the only thing tying a checkout back to the agent
+that made it.
+
+### Worktree-only flags under another placement
+
+`--branch` or `--base` with any other placement is a usage error, checked in `execute` before
+anything is created. clap 4 cannot express "valid only when `--placement` is `worktree`" —
+`conflicts_with` takes an argument id, not a value predicate — so this is one of the "arguments that
+parse but cannot be honored" that row 2 of the exit-status contract already covers.
+
+Ignoring the flag was the alternative and is worse: a caller templating `--branch` into every spawn
+would never learn that the isolation it asked for did not happen.
+
+### What the seam grows
+
+`surface::create_worktree(branch, base, label, source, focus) -> Result<(PaneId, Checkout),
+HerdrError>`, and one public type:
+
+```rust
+pub struct Checkout { pub branch: Option<String>, pub path: String }
+```
+
+`Checkout` is deserialized from herdr's response and serialized into ours unchanged — what "parse
+only the fields we branch on" looks like when the fields are not branched on at all, but reported.
+herdr's `WorktreeInfo` also carries `is_bare`, `is_detached`, `is_prunable`, `is_linked_worktree`,
+`open_workspace_id`, and `label`; serde drops what it is not asked for. Those six are constants on
+something created a millisecond ago, unlike `AgentRecord`, which is nested whole because it is an
+identity rather than a snapshot. `branch` stays `Option` because herdr's field is optional, not
+because a create is expected to produce a detached checkout.
+
+The return is a tuple, not a named struct. `surface.rs` makes four things now, and `(PaneId,
+Checkout)` names both halves without minting a fifth type to hold them.
+
+### What `spawn` reports
+
+`Spawned` grows `worktree`, omitted for the other three placements the way `delivered` is already
+omitted when no prompt was given:
+
+```json
+{"type":"result","placement":"worktree",
+ "worktree":{"branch":"worktree/lucky-harbor-8e01",
+             "path":"/…/worktrees/herdr/worktree-lucky-harbor-8e01"},
+ "agent":{"agent":"claude","agent_status":"working","pane_id":"w9:p1", …}}
+```
+
+Human mode gains a suffix: `reviewer (claude) → w9:p1 [worktree/lucky-harbor-8e01]`.
+
+Reported because the branch is herdr's to generate, which makes this response the one cheap moment
+it is knowable. Without it, every caller that cares runs `worktree list` against the source repo and
+then guesses which of several checkouts is the one it just made.
+
+### One exit-status correction
+
+`worktree_operation_in_progress` — another create or remove already running against that checkout —
+joins the codes mapped to 5. It is transient by construction, and row 5 is for exactly that. The
+three other codes a worktree spawn can meet stay at 1, correctly: `not_git_worktree` and
+`linked_worktree_source` are about where the caller is, and `worktree_create_failed` is git
+refusing. None of them improves on a retry.
+
+`linked_worktree_source` is the one worth knowing in advance. herdr refuses to create a worktree
+whose source is itself a linked worktree, so a worktree agent cannot spawn a nested worktree agent.
+herdr's rule and herdr's message, forwarded.
+
+### What the amendment adds to the module map
+
+Nothing. `surface.rs` gains a fourth creator and the type it reports, which is the module's stated
+job, and `spawn.rs` gains two flags and a match arm.
+
 ## Open for later
 
 Kept in the README's roadmap so each stays a decision rather than an omission:
+
+- **Removing a worktree when its agent ends.** `kill` closes a pane, and `worktree remove` is a
+  separate herdr call, so a killed worktree agent leaves its checkout and its branch behind. This is
+  what makes a name-derived branch collide on reuse, above.
+
+  Deferred rather than declined, because the safe version needs a dirty-checkout policy this MVP has
+  no opinion on. herdr's `worktree remove --force` exists for precisely that question, and answering
+  it on behalf of a caller who may have uncommitted work in there is not a default worth guessing.
 
 - **Inter-agent messaging with an envelope carrying the sender's identity and a reply path.** Not
   polish on `prompt` — a different job, and the distinction is worth stating because it decides
