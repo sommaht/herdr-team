@@ -19,6 +19,20 @@ impl AgentHarness for Codex {
     fn marker(&self) -> char {
         '›'
     }
+
+    /// The same `SessionStart` envelope Claude Code reads, on weaker evidence than that one.
+    ///
+    /// What is established: Codex runs a `SessionStart` hook, and its hooks answer with JSON on stdout
+    /// — a generated Codex hook config falls back to `echo '{}'` on every event. What is *not*
+    /// established is which keys it reads to inject context; that contract was looked for and not
+    /// found. The shape here rests on the tool this borrowed the idea from wrapping Codex, Claude Code,
+    /// and Gemini CLI in one envelope from a single flag.
+    ///
+    /// Written out rather than inherited so that reading Codex's real contract is an edit *here*,
+    /// against a claim that says what it was based on.
+    fn hook(&self, context: &str) -> Result<String, serde_json::Error> {
+        super::session_start(context)
+    }
 }
 
 // =====================================================================================================================
