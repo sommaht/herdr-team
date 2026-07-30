@@ -153,7 +153,14 @@ impl HerdrError {
         match self.code() {
             Some("agent_target_ambiguous") => ExitStatus::Usage,
             Some("agent_not_found" | "agent_pane_not_found" | "pane_not_found") => ExitStatus::NotFound,
-            Some("agent_pane_busy" | "agent_prompt_stalled" | "agent_name_taken") => ExitStatus::Conflict,
+            // `worktree_operation_in_progress` is herdr saying another create or remove is already
+            // running against that checkout, which is transient by construction. The other worktree
+            // codes stay a general failure, correctly: `not_git_worktree` and
+            // `linked_worktree_source` are about where the caller is, and `worktree_create_failed`
+            // is git refusing. None of those improves on a retry.
+            Some(
+                "agent_pane_busy" | "agent_prompt_stalled" | "agent_name_taken" | "worktree_operation_in_progress",
+            ) => ExitStatus::Conflict,
             Some(_) | None => ExitStatus::Failure,
         }
     }
@@ -321,6 +328,14 @@ mod tests {
             ("agent_pane_busy", ExitStatus::Conflict),
             ("agent_prompt_stalled", ExitStatus::Conflict),
             ("agent_name_taken", ExitStatus::Conflict),
+            // Another create or remove already running against that checkout — transient by
+            // construction, so it is the one worktree code worth retrying.
+            ("worktree_operation_in_progress", ExitStatus::Conflict),
+            // The other three a worktree spawn can meet. Two are about where the caller is and one
+            // is git refusing; retrying any of them changes nothing.
+            ("not_git_worktree", ExitStatus::Failure),
+            ("linked_worktree_source", ExitStatus::Failure),
+            ("worktree_create_failed", ExitStatus::Failure),
             // Anything herdr grows later is a general failure, not a compile error.
             ("agent_launch_pending", ExitStatus::Failure),
             ("something_herdr_added_last_week", ExitStatus::Failure),

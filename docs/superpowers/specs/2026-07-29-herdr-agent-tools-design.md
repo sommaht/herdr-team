@@ -647,7 +647,8 @@ is what `core` is for. `prompt`'s re-send is the plausible second caller, if it 
 
 ## Amendment — `--placement worktree`
 
-**Status:** specified, not yet built. A fourth value for the flag the previous amendment introduced;
+**Status:** implemented, unrehearsed — every check below is static, and nothing here has been run
+against a live herdr session. A fourth value for the flag the previous amendment introduced;
 everything that section says about the other three still holds.
 
 ```
@@ -765,8 +766,22 @@ herdr's rule and herdr's message, forwarded.
 
 ### What the amendment adds to the module map
 
-Nothing. `surface.rs` gains a fourth creator and the type it reports, which is the module's stated
-job, and `spawn.rs` gains two flags and a match arm.
+No file. `surface.rs` gains a fourth creator and the type it reports, which is the module's stated
+job, and `spawn.rs` gains two flags, a pre-check, and a `create_surface` step.
+
+That step is named rather than inlined because the four-arm match pushed `execute` past RS-031's
+fifty lines, and the rule's escape — reading as ordered named steps — is what `execute`'s own doc
+comment already claims it does. Splitting the branching out is how that claim stays true.
+
+**`spawn.rs` is now over RS-033's file-size prompt**, at 478 non-test lines against a 400 threshold
+it was under at 376. Left as a prompt rather than answered here, and it is the open question this
+amendment hands forward. The boundary the module doc has been holding is `anchor` plus
+`SpawnArgs::workspace`, waiting on `--from`; the one this amendment creates is larger and different
+— placement resolution, meaning `create_surface`, `anchor`, `check_worktree_flags`,
+`SpawnArgs::workspace`, and the two usage errors, which is about a hundred and thirty lines with a
+single consumer. Whether that is RS-032's blessed substantial module or a role carved out of one
+flow is the judgment call, and making it while shipping a placement would have decided it by
+accident.
 
 ## Open for later
 

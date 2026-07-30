@@ -1,4 +1,4 @@
-//! The three ways to make a pane for an agent to start in, and the one way to take it away again.
+//! The four ways to make a pane for an agent to start in, and the one way to take it away again.
 
 use clap::ValueEnum;
 use serde::de::IgnoredAny;
@@ -25,6 +25,8 @@ pub enum Placement {
     Tab,
     /// A new workspace, whose root pane the agent takes.
     Workspace,
+    /// A new Git worktree, whose workspace's root pane the agent takes.
+    Worktree,
 }
 
 /// Whether a created surface takes the user's focus.
@@ -86,6 +88,30 @@ pub fn create_workspace(label: &AgentName, cwd: &str, focus: Focus) -> Result<Pa
     Ok(created.root_pane.pane_id)
 }
 
+/// Creates a Git worktree of `source`, labels its workspace `label`, and reports its root pane
+/// along with the checkout it opened on.
+///
+/// `source` is the checkout the worktree is cut *from*, not where it lands — herdr chooses the
+/// checkout path itself, under the `worktree_directory` in its own config. `branch` and `base` are
+/// herdr's to default: it generates a `worktree/`-prefixed branch name for `None` and bases on
+/// `HEAD`, and restating either here would be a second authority to keep in step.
+///
+/// # Errors
+///
+/// Returns whatever [`run`] returned. `linked_worktree_source` is the refusal worth expecting:
+/// herdr will not cut a worktree whose source is itself a linked worktree, so an agent already in
+/// one cannot nest another.
+pub fn create_worktree(
+    label: &AgentName,
+    source: &str,
+    branch: Option<&str>,
+    base: Option<&str>,
+    focus: Focus,
+) -> Result<(PaneId, Checkout), HerdrError> {
+    let created: WorktreeCreated = run(&worktree_args(label, source, branch, base, focus))?;
+    Ok((created.root_pane.pane_id, created.worktree))
+}
+
 /// The workspace a pane currently belongs to.
 ///
 /// Asked rather than read from herdr's `HERDR_WORKSPACE_ID`, which it injects when a pane is created
@@ -138,6 +164,31 @@ struct RootPaneCreated {
 #[derive(Debug, Deserialize)]
 struct PaneRef {
     pane_id: PaneId,
+}
+
+/// `worktree create`'s result: the root pane, and the checkout the new workspace sits on.
+#[derive(Debug, Deserialize)]
+struct WorktreeCreated {
+    root_pane: PaneRef,
+    worktree: Checkout,
+}
+
+/// Where a worktree spawn landed, read from herdr's response and reported onward unchanged.
+///
+/// The one public type in this section, because it is the one a caller is given rather than a
+/// field this module reads and discards. herdr's worktree object also carries `is_bare`,
+/// `is_detached`, `is_prunable`, `is_linked_worktree`, `open_workspace_id`, and `label`; serde
+/// drops what it is not asked for, and all six are constants on something created a millisecond
+/// ago.
+///
+/// `branch` is optional because herdr's field is, not because a create is expected to produce a
+/// detached checkout.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct Checkout {
+    /// The branch the worktree checked out — herdr's, whether generated or the one asked for.
+    pub branch: Option<String>,
+    /// The absolute path herdr put the checkout at.
+    pub path: String,
 }
 
 /// `pane get`'s result, read only for the workspace the pane sits in.
@@ -203,6 +254,30 @@ fn workspace_args(label: &str, cwd: &str, focus: Focus) -> Vec<String> {
     ["workspace", "create", "--cwd", cwd, "--label", label, focus.flag()]
         .map(str::to_owned)
         .to_vec()
+}
+
+/// `herdr worktree create --cwd <SOURCE> [--branch <NAME>] [--base <REF>] --label <LABEL>
+/// --(no-)focus`.
+///
+/// `--cwd` is passed on every call for the same reason `tab create` always names `--workspace`:
+/// omitting it makes herdr resolve the source to whichever workspace is *UI-focused*, so the
+/// worktree would be cut from whatever repository the human was last looking at. Here `--cwd` names
+/// the source checkout rather than the new surface's working directory, which herdr derives.
+///
+/// `--branch` and `--base` are omitted entirely when the caller did not give them, so herdr applies
+/// its own defaults rather than ours.
+fn worktree_args(label: &str, source: &str, branch: Option<&str>, base: Option<&str>, focus: Focus) -> Vec<String> {
+    let mut args = ["worktree", "create", "--cwd", source].map(str::to_owned).to_vec();
+    if let Some(branch) = branch {
+        args.push("--branch".to_owned());
+        args.push(branch.to_owned());
+    }
+    if let Some(base) = base {
+        args.push("--base".to_owned());
+        args.push(base.to_owned());
+    }
+    args.extend(["--label", label, focus.flag()].map(str::to_owned));
+    args
 }
 
 /// `herdr pane get <PANE>`.
@@ -303,6 +378,61 @@ mod tests {
         assert_eq!(split_args("w4:p1", "/w", Focus::Take).last().unwrap(), "--focus");
         assert_eq!(tab_args(None, "reviewer", "/w", Focus::Take).last().unwrap(), "--focus");
         assert_eq!(workspace_args("reviewer", "/w", Focus::Take).last().unwrap(), "--focus");
+        assert_eq!(
+            worktree_args("reviewer", "/w", None, None, Focus::Take).last().unwrap(),
+            "--focus"
+        );
+    }
+
+    /// A worktree names its source checkout, never leaving herdr to pick one.
+    ///
+    /// The same trap `tab create` is pinned against, one call along: given neither `--cwd` nor
+    /// `--workspace`, herdr resolves the source to the *focused* workspace, so the worktree would be
+    /// cut from whichever repository the human had last clicked on. `--cwd` here is the checkout to
+    /// branch from, not the new surface's working directory — herdr derives that from the checkout
+    /// it creates.
+    #[test]
+    fn a_worktree_names_the_source_checkout_and_the_branch_and_base_when_it_has_them() {
+        assert_eq!(
+            worktree_args(
+                "reviewer",
+                "/work/repo",
+                Some("worktree/fix-flake"),
+                Some("origin/main"),
+                Focus::Leave
+            ),
+            [
+                "worktree",
+                "create",
+                "--cwd",
+                "/work/repo",
+                "--branch",
+                "worktree/fix-flake",
+                "--base",
+                "origin/main",
+                "--label",
+                "reviewer",
+                "--no-focus"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_worktree_omits_branch_and_base_rather_than_restating_herdrs_defaults() {
+        // herdr generates a `worktree/`-prefixed branch name and bases on HEAD. Spelling either
+        // here would be a second authority that drifts the day herdr changes its mind.
+        assert_eq!(
+            worktree_args("reviewer", "/work/repo", None, None, Focus::Leave),
+            [
+                "worktree",
+                "create",
+                "--cwd",
+                "/work/repo",
+                "--label",
+                "reviewer",
+                "--no-focus"
+            ]
+        );
     }
 
     #[test]
@@ -318,6 +448,43 @@ mod tests {
             serde_json::from_str(r#"{"type":"tab_created","tab":{"tab_id":"w4:t3"},"root_pane":{"pane_id":"w4:p17"}}"#)
                 .unwrap();
         assert_eq!(tab.root_pane.pane_id, PaneId::from("w4:p17"));
+    }
+
+    /// A worktree response is read for two things, and everything else herdr says about it is
+    /// dropped.
+    ///
+    /// `root_pane` is the same field a tab and a workspace are read for — `worktree create` makes a
+    /// workspace, so it answers in that shape. The `worktree` object is the one place the branch is
+    /// cheaply knowable, because herdr generated it; the six flags beside it are constants on a
+    /// checkout this old and none of them is worth reporting.
+    #[test]
+    fn a_worktree_is_read_for_its_root_pane_and_its_checkout_and_nothing_else() {
+        let created: WorktreeCreated = serde_json::from_str(
+            r#"{"type":"worktree_created","workspace":{"workspace_id":"w9"},"tab":{"tab_id":"w9:t1"},
+                "root_pane":{"pane_id":"w9:p1"},
+                "worktree":{"path":"/work/trees/repo/worktree-lucky-harbor-8e01",
+                            "branch":"worktree/lucky-harbor-8e01","is_bare":false,
+                            "is_detached":false,"is_prunable":false,"is_linked_worktree":true,
+                            "label":"repo"}}"#,
+        )
+        .unwrap();
+
+        assert_eq!(created.root_pane.pane_id, PaneId::from("w9:p1"));
+        assert_eq!(created.worktree.branch.as_deref(), Some("worktree/lucky-harbor-8e01"));
+        assert_eq!(created.worktree.path, "/work/trees/repo/worktree-lucky-harbor-8e01");
+    }
+
+    #[test]
+    fn a_checkout_is_reported_as_the_two_fields_it_was_read_for() {
+        let checkout = Checkout {
+            branch: Some("worktree/lucky-harbor-8e01".to_owned()),
+            path: "/work/trees/repo/worktree-lucky-harbor-8e01".to_owned(),
+        };
+
+        assert_eq!(
+            serde_json::to_string(&checkout).unwrap(),
+            r#"{"branch":"worktree/lucky-harbor-8e01","path":"/work/trees/repo/worktree-lucky-harbor-8e01"}"#
+        );
     }
 
     #[test]
@@ -362,5 +529,6 @@ mod tests {
         assert_eq!(serde_json::to_string(&Placement::Pane).unwrap(), r#""pane""#);
         assert_eq!(serde_json::to_string(&Placement::Tab).unwrap(), r#""tab""#);
         assert_eq!(serde_json::to_string(&Placement::Workspace).unwrap(), r#""workspace""#);
+        assert_eq!(serde_json::to_string(&Placement::Worktree).unwrap(), r#""worktree""#);
     }
 }

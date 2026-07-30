@@ -63,6 +63,8 @@ the output rather than you reading it.
     spawn <name>                          split the calling pane; needs HERDR_PANE_ID
     spawn <name> --placement tab          give it a tab of its own
     spawn <name> --placement workspace    give it a workspace of its own
+    spawn <name> --placement worktree     a Git worktree of its own, on a new branch
+    spawn <name> --branch <name>          name that branch; otherwise herdr picks
     spawn <name> --preset <preset>        pick which agent starts; see Presets below
     spawn <name> --prompt \"<text>\"        deliver a first prompt once it is up
     spawn <name> --prompt -               read that first prompt from stdin
