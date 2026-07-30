@@ -33,19 +33,7 @@ impl Cmd for PresetsArgs {
     type Err = ConfigError;
 
     fn execute(self, _sink: &Sink) -> Result<Self::Ok, Self::Err> {
-        let presets = Presets::load(self.config.as_deref())?;
-        Ok(PresetList {
-            default: presets.default_name().to_owned(),
-            presets: presets
-                .iter()
-                .map(|(name, preset)| PresetLine {
-                    name: name.to_owned(),
-                    kind: preset.kind().to_owned(),
-                    args: preset.args().to_vec(),
-                    default: name == presets.default_name(),
-                })
-                .collect(),
-        })
+        Ok(PresetList::of(&Presets::load(self.config.as_deref())?))
     }
 }
 
@@ -66,6 +54,28 @@ pub struct PresetList {
     default: String,
     /// One entry per preset.
     presets: Vec<PresetLine>,
+}
+
+impl PresetList {
+    /// The listing for a loaded config.
+    ///
+    /// Shared with `prime`, which renders the same table inside its brief: one place builds it, so
+    /// what `prime` tells an agent about the presets cannot disagree with what `presets` prints or
+    /// with what `spawn --preset` will actually do.
+    pub(super) fn of(presets: &Presets) -> Self {
+        Self {
+            default: presets.default_name().to_owned(),
+            presets: presets
+                .iter()
+                .map(|(name, preset)| PresetLine {
+                    name: name.to_owned(),
+                    kind: preset.kind().to_owned(),
+                    args: preset.args().to_vec(),
+                    default: name == presets.default_name(),
+                })
+                .collect(),
+        }
+    }
 }
 
 /// One preset as the listing reports it.

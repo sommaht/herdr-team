@@ -4,11 +4,13 @@
 
 mod kill;
 mod presets;
+mod prime;
 mod prompt;
 mod spawn;
 
 pub use kill::KillArgs;
 pub use presets::PresetsArgs;
+pub use prime::PrimeArgs;
 pub use prompt::PromptArgs;
 pub use spawn::SpawnArgs;
 

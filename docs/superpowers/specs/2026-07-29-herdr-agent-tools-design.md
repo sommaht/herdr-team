@@ -1,6 +1,6 @@
 # herdr-agent-tools — design
 
-**Date:** 2026-07-29 · **Status:** implemented, with an amendment below that is not yet implemented
+**Date:** 2026-07-29 · **Status:** implemented, amendment included
 
 ## What this is
 
@@ -15,7 +15,8 @@ recorded under "The findings" below.
 
 ## Scope
 
-Three commands:
+Three commands, which the amendment at the end later took to five — it adds `kill` and `prime`, and
+records why `whoami` and a `--from` flag were declined.
 
 | Command | Purpose |
 | ------- | ------- |
@@ -438,8 +439,8 @@ prompt text or captured terminal content in an error message.
 
 ## Amendment — placement, `kill`, `prime`
 
-**Status:** not yet implemented. Everything above describes what shipped; this section supersedes the
-lines it names and is the thing to build. Reconcile the body into it once it lands.
+**Status:** implemented. Everything above describes the first three commands; this section supersedes
+the lines it names, and where the two disagree this one is what the code does.
 
 Two ideas raised alongside these three were rejected, and both are recorded because the reasoning is
 the useful part:
@@ -535,19 +536,33 @@ reference dump cannot justify when `--help` is one command away. What an agent c
 demand is that the tool exists, when to reach for it, and which failures are worth retrying — so
 that is what this says, in workflow shape rather than flag shape.
 
-**The presets table is generated**, from the same `PresetList` the `presets` command renders. That
-part therefore cannot drift from what `spawn --preset` will really do, which is more than the
-hand-maintained table it replaces could promise.
+**Two halves are generated**, because generating them is what stops them drifting. The presets table
+comes from the same `PresetList` the `presets` command renders, so what the brief says about presets
+cannot disagree with what `spawn --preset` will do. And the **command index** — one line per
+subcommand, name and description — comes from clap's tree, where each `*Args` struct's doc comment is
+already the description `--help` prints.
 
-Four tests hold the prose honest, since a static text blob is otherwise the least-tested artifact
-here:
+That second one is a change from the draft below, which hand-wrote a synopsis with each command's key
+flags. Generating it deletes a test rather than passing one: there is no longer a prose command name
+that could fail to resolve. It also narrows what the prose has to carry, since the flags an agent most
+needs are named in the paragraphs anyway. This is not the rendered help this section rejects — a
+four-line index of names and descriptions is different in kind from two hundred lines of flags.
 
-1. Every `herdr-agent-tools <command>` named in the text resolves in the clap tree.
-2. Every flag named resolves on the command it is attributed to.
-3. Every exit code named matches `ExitStatus`.
-4. The prose stays inside a forty-line budget, so the discipline survives later edits.
+Three tests hold the remaining prose honest, since a static text blob is otherwise the least-tested
+artifact here:
 
-Tests 1–3 walk `Cli::command()`, so they fail on a rename rather than going stale. The draft:
+1. Every flag the prose names still exists somewhere in the clap tree. It cannot catch a flag
+   attributed to the wrong command; with four commands, that is what reading the prose is for. The
+   assertion that the extracted flag set is *non-empty* is load-bearing — the prose backticks its
+   flags, so a token arrives as ``​`--placement`` and the test passes vacuously if the trimming
+   breaks.
+2. Every exit code the prose teaches matches `ExitStatus`, asserted against the *current* number so a
+   renumbering fails here rather than leaving an agent retrying on a code that stopped meaning
+   retryable.
+3. The prose stays inside a forty-line budget, so the discipline survives later edits. The budget
+   covers the prose only: the preset table's length belongs to whoever wrote the config.
+
+The draft, whose synopsis block the generated index replaced:
 
 ```text
 herdr-agent-tools launches and prompts herdr agents. Reach for it instead of `herdr` when
@@ -580,6 +595,14 @@ Presets:
 ```
 
 This retires the "printed conventions block" entry in "Open for later", which is what it is.
+
+### What the amendment adds to the module map
+
+Two files, taking the map from twelve to sixteen — `src/cmd/kill.rs` and `src/cmd/prime.rs`, plus the
+two `src/harness/` files an earlier refactor added. `surface.rs` grows `close`, which makes it the
+three ways to make a pane *and the one way to take one away*; nothing else moves. Neither new command
+needed a module of its own beneath `cmd`, and `prime` deliberately reaches sideways for
+`presets::PresetList` rather than minting a second renderer of the same table.
 
 ## Open for later
 
