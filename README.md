@@ -72,5 +72,8 @@ Each of these is a decision to defer, not an oversight.
 - **Witnessed delivery** — proving a message was received rather than that it was submitted.
 - **Placeholder discrimination in the composer guard** — telling a harness's dimmed placeholder
   hint apart from typed text, via styling attributes rather than plain text.
+- **Spawning somewhere other than here** — `spawn` infers where it is from the environment, so it
+  can only split the pane it runs in, and only when it runs in one. A flag naming a pane would let a
+  caller outside a session split anyway, and one inside anchor somewhere other than itself.
 - **A conventions block** — so an agent driving this CLI picks the conventions up without being
   told them in every prompt.
