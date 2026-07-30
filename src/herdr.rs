@@ -152,7 +152,7 @@ impl HerdrError {
     pub fn exit_status(&self) -> ExitStatus {
         match self.code() {
             Some("agent_target_ambiguous") => ExitStatus::Usage,
-            Some("agent_not_found" | "agent_pane_not_found") => ExitStatus::NotFound,
+            Some("agent_not_found" | "agent_pane_not_found" | "pane_not_found") => ExitStatus::NotFound,
             Some("agent_pane_busy" | "agent_prompt_stalled" | "agent_name_taken") => ExitStatus::Conflict,
             Some(_) | None => ExitStatus::Failure,
         }
@@ -315,6 +315,9 @@ mod tests {
             ("agent_target_ambiguous", ExitStatus::Usage),
             ("agent_not_found", ExitStatus::NotFound),
             ("agent_pane_not_found", ExitStatus::NotFound),
+            // `pane close`'s answer for a target that names nothing, which is how `kill` learns that
+            // a string it passed through was not a pane id after all.
+            ("pane_not_found", ExitStatus::NotFound),
             ("agent_pane_busy", ExitStatus::Conflict),
             ("agent_prompt_stalled", ExitStatus::Conflict),
             ("agent_name_taken", ExitStatus::Conflict),

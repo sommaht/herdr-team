@@ -1,6 +1,7 @@
-//! The three ways to make a pane for an agent to start in.
+//! The three ways to make a pane for an agent to start in, and the one way to take it away again.
 
 use clap::ValueEnum;
+use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
 
 use crate::core::{AgentName, PaneId};
@@ -85,6 +86,22 @@ pub fn create_workspace(label: &AgentName, cwd: &str, focus: Focus) -> Result<Pa
     Ok(created.root_pane.pane_id)
 }
 
+/// Closes a pane, taking whatever was running in it.
+///
+/// The target is a `&str` rather than a [`PaneId`], unlike the three above: theirs come from the
+/// environment or from a herdr response, while this one can be a string a caller typed. Whether it
+/// names a pane at all is herdr's to answer, and passing it through unexamined is how this crate
+/// stays out of guessing at an id format.
+///
+/// # Errors
+///
+/// Returns whatever [`run`] returned.
+pub fn close(pane: &str) -> Result<(), HerdrError> {
+    // herdr answers `{"type":"ok"}`. That the call happened is the whole result.
+    run::<IgnoredAny>(&close_args(pane))?;
+    Ok(())
+}
+
 // =====================================================================================================================
 // Responses
 // =====================================================================================================================
@@ -154,6 +171,11 @@ fn workspace_args(label: &str, cwd: &str, focus: Focus) -> Vec<String> {
     ["workspace", "create", "--cwd", cwd, "--label", label, focus.flag()]
         .map(str::to_owned)
         .to_vec()
+}
+
+/// `herdr pane close <PANE>`.
+fn close_args(pane: &str) -> Vec<String> {
+    ["pane", "close", pane].map(str::to_owned).to_vec()
 }
 
 // =====================================================================================================================
@@ -258,6 +280,20 @@ mod tests {
             serde_json::from_str(r#"{"type":"tab_created","tab":{"tab_id":"w4:t3"},"root_pane":{"pane_id":"w4:p17"}}"#)
                 .unwrap();
         assert_eq!(tab.root_pane.pane_id, PaneId::from("w4:p17"));
+    }
+
+    #[test]
+    fn a_close_names_the_pane_and_nothing_else() {
+        // No flags exist on herdr's side: `pane close` takes a pane id and acts. Every guard in front
+        // of it is this crate's.
+        assert_eq!(close_args("w4:p17"), ["pane", "close", "w4:p17"]);
+    }
+
+    #[test]
+    fn a_close_result_carries_nothing_worth_reading() {
+        // herdr answers `{"type":"ok"}`, which is why `close` deserializes into `IgnoredAny` rather
+        // than minting a response struct with no fields anyone reads.
+        assert!(serde_json::from_str::<IgnoredAny>(r#"{"type":"ok"}"#).is_ok());
     }
 
     #[test]
