@@ -4,8 +4,10 @@
 //! would mark.
 
 mod presets;
+mod prompt;
 
 pub use presets::PresetsArgs;
+pub use prompt::PromptArgs;
 
 use std::fmt::Display;
 

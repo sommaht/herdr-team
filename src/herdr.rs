@@ -163,6 +163,14 @@ impl HerdrError {
         }
     }
 
+    /// Whether herdr is saying a submission did not move the agent, rather than that it refused it.
+    ///
+    /// Lives here rather than beside the caller because these are herdr's codes, and this module is
+    /// where herdr's vocabulary is read — the same reason [`exit_status`](Self::exit_status) is here.
+    pub fn is_undelivered(&self) -> bool {
+        matches!(self.code(), Some("agent_prompt_stalled" | "timeout"))
+    }
+
     /// herdr's command and code, for nesting inside this crate's own error envelope.
     ///
     /// Nested rather than emitted flat, so a consumer can still tell our failures from herdr's.
@@ -326,6 +334,27 @@ mod tests {
             };
             assert_eq!(error.exit_status(), expected, "{code}");
         }
+    }
+
+    #[test]
+    fn only_the_two_codes_that_mean_the_prompt_did_not_land_are_undelivered() {
+        // The re-send is for a submission herdr says did not move the agent — never for one it
+        // refused, which re-sending would only refuse again.
+        for code in ["agent_prompt_stalled", "timeout"] {
+            let error = HerdrError::Refused {
+                command: "agent prompt".to_owned(),
+                code: code.to_owned(),
+                message: "…".to_owned(),
+            };
+            assert!(error.is_undelivered(), "{code}");
+        }
+
+        let refused = HerdrError::Refused {
+            command: "agent prompt".to_owned(),
+            code: "agent_not_found".to_owned(),
+            message: "…".to_owned(),
+        };
+        assert!(!refused.is_undelivered());
     }
 
     #[test]
