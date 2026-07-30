@@ -1,5 +1,6 @@
 //! The three ways to make a pane for an agent to start in.
 
+use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
 use crate::core::{AgentName, PaneId};
@@ -10,7 +11,11 @@ use crate::herdr::{HerdrError, run};
 // =====================================================================================================================
 
 /// Where a new agent's pane comes from.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+///
+/// `ValueEnum` here is what makes `spawn --placement` parse straight into this type, so the parsed
+/// shape *is* the domain type rather than a boolean triple translated into one. clap spells each
+/// variant lowercase, which is what `Serialize` already emitted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum Placement {
     /// Split the calling pane.
