@@ -73,6 +73,15 @@ impl Sink {
         self.emit(&self.out, "result", None, value);
     }
 
+    /// Emits a result that is the same text in either mode.
+    ///
+    /// For a value whose whole content is a document rather than fields — see
+    /// [`Cmd::TEXT_IN_BOTH_MODES`](crate::cmd::Cmd::TEXT_IN_BOTH_MODES). Takes only `Display`, since
+    /// there is deliberately no wire form to choose between.
+    pub fn out_text<T: Display + ?Sized>(&self, value: &T) {
+        write_line(&self.out, value);
+    }
+
     /// Emits a diagnostic — a warning on a path that still succeeds.
     ///
     /// Takes a string rather than a value, because a warning *is* a sentence: there is no
