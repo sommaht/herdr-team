@@ -86,6 +86,21 @@ pub fn create_workspace(label: &AgentName, cwd: &str, focus: Focus) -> Result<Pa
     Ok(created.root_pane.pane_id)
 }
 
+/// The workspace a pane currently belongs to.
+///
+/// Asked rather than read from herdr's `HERDR_WORKSPACE_ID`, which it injects when a pane is created
+/// and cannot update afterwards — nothing can rewrite a running shell's environment from outside. Move
+/// a pane to another workspace and that variable still names the old one, silently, where this call
+/// reports the new one. One extra call buys an answer that is right in both cases.
+///
+/// # Errors
+///
+/// Returns whatever [`run`] returned.
+pub fn workspace_of(pane: &str) -> Result<String, HerdrError> {
+    let info: PaneWorkspace = run(&get_args(pane))?;
+    Ok(info.pane.workspace_id)
+}
+
 /// Closes a pane, taking whatever was running in it.
 ///
 /// The target is a `&str` rather than a [`PaneId`], unlike the three above: theirs come from the
@@ -125,6 +140,22 @@ struct PaneRef {
     pane_id: PaneId,
 }
 
+/// `pane get`'s result, read only for the workspace the pane sits in.
+///
+/// A separate type from [`PaneCreated`] rather than an optional field on [`PaneRef`]: a creation
+/// response does not report a workspace at all, and one struct spanning both would make the field
+/// optional in the one place it is required.
+#[derive(Debug, Deserialize)]
+struct PaneWorkspace {
+    pane: WorkspaceRef,
+}
+
+/// The one field a `pane get` is made for here.
+#[derive(Debug, Deserialize)]
+struct WorkspaceRef {
+    workspace_id: String,
+}
+
 // =====================================================================================================================
 // Helpers
 // =====================================================================================================================
@@ -155,7 +186,8 @@ fn split_args(pane: &str, cwd: &str, focus: Focus) -> Vec<String> {
 /// `$HERDR_PANE_ID` rather than herdr's `--current`: omitting it makes herdr resolve the workspace
 /// server-side to whichever one is *UI-focused*, which is not the caller's whenever the human has
 /// clicked elsewhere. A tab meant for this project then opens in whatever the user was last
-/// looking at. Absent the variable there is nothing to pin, and herdr's own default stands.
+/// looking at. `None` is for a caller with no pane of its own, where there is nothing to pin and
+/// herdr's default is all there is — see [`workspace_of`] for where the id comes from otherwise.
 fn tab_args(workspace: Option<&str>, label: &str, cwd: &str, focus: Focus) -> Vec<String> {
     let mut args = vec!["tab".to_owned(), "create".to_owned()];
     if let Some(workspace) = workspace {
@@ -171,6 +203,11 @@ fn workspace_args(label: &str, cwd: &str, focus: Focus) -> Vec<String> {
     ["workspace", "create", "--cwd", cwd, "--label", label, focus.flag()]
         .map(str::to_owned)
         .to_vec()
+}
+
+/// `herdr pane get <PANE>`.
+fn get_args(pane: &str) -> Vec<String> {
+    ["pane", "get", pane].map(str::to_owned).to_vec()
 }
 
 /// `herdr pane close <PANE>`.
@@ -211,7 +248,8 @@ mod tests {
     /// Regression: without `--workspace`, herdr resolves the workspace server-side to whichever one
     /// the UI has focused. A rehearsal launch opened its tab in an unrelated project's workspace
     /// because the human had clicked there — the same trap `split` avoids by naming
-    /// `$HERDR_PANE_ID` instead of `--current`.
+    /// `$HERDR_PANE_ID` instead of `--current`. The id itself comes from [`workspace_of`], not from
+    /// the environment, so it is also right for a pane that has since been moved.
     #[test]
     fn a_tab_names_the_callers_own_workspace_when_it_has_one() {
         assert_eq!(
@@ -280,6 +318,29 @@ mod tests {
             serde_json::from_str(r#"{"type":"tab_created","tab":{"tab_id":"w4:t3"},"root_pane":{"pane_id":"w4:p17"}}"#)
                 .unwrap();
         assert_eq!(tab.root_pane.pane_id, PaneId::from("w4:p17"));
+    }
+
+    #[test]
+    fn a_workspace_lookup_asks_about_one_pane() {
+        assert_eq!(get_args("w4:p17"), ["pane", "get", "w4:p17"]);
+    }
+
+    /// The workspace comes from herdr, never from the pane's environment.
+    ///
+    /// Regression, and the reason this call exists at all: `HERDR_WORKSPACE_ID` is injected when a
+    /// pane is created and cannot be rewritten in a running shell afterwards. A pane moved to another
+    /// workspace keeps the old id, so a tab spawned from it would open in the workspace it *used* to
+    /// be in — verified live, where `pane get` reported the new workspace after a move while the
+    /// variable could not have.
+    #[test]
+    fn a_pane_get_is_read_only_for_the_workspace_and_ignores_the_rest() {
+        let info: PaneWorkspace = serde_json::from_str(
+            r#"{"pane":{"agent":"claude","agent_status":"working","cwd":"/work","focused":false,
+                "pane_id":"wJ:p1","revision":20,"tab_id":"wJ:t1","workspace_id":"wJ"}}"#,
+        )
+        .unwrap();
+
+        assert_eq!(info.pane.workspace_id, "wJ");
     }
 
     #[test]

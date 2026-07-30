@@ -2,9 +2,19 @@
 //!
 //! The longest file here because it is the longest command: five ordered steps across three
 //! placements, each of which can fail after the previous one has already changed something in herdr.
-//! It reads as one transaction, so splitting it would hide that ordering and it stays one file. If it
-//! does have to shrink, [`Backoff`] is the separable piece — kept here only because one consumer does
-//! not justify a file of its own.
+//! It reads as one transaction, so splitting it would hide that ordering and it stays one file.
+//!
+//! **RS-033 answered rather than waived.** This sits just over the prompt's line count and has crossed
+//! it in both directions, so here is the standing answer. Two candidates to move, and neither is worth
+//! it yet:
+//!
+//! - [`Backoff`] is genuinely separable, and has one consumer twenty lines above it.
+//! - [`anchor`] and [`SpawnArgs::workspace`] together answer "where is the caller", which is a real
+//!   boundary rather than a line-count one — it is the thing a `--from` flag would override. Until
+//!   something other than this flow asks that question, they are steps of the flow directly above
+//!   them, and a reader following `execute` finds them where they are used.
+//!
+//! The trigger is a second caller, not a line count. `--from` landing is what moves the second pair.
 
 use std::fmt::Display;
 use std::path::PathBuf;
@@ -29,12 +39,6 @@ use crate::herdr::{HerdrError, HerdrRef};
 
 /// The environment variable herdr exports into every pane it owns, holding that pane's id.
 const PANE_VARIABLE: &str = "HERDR_PANE_ID";
-
-/// The caller's own workspace, used to pin where `--placement tab` opens.
-///
-/// Unlike [`PANE_VARIABLE`], an absent value is not an error: a tab still opens without it, it just
-/// falls back to herdr's own default placement.
-const WORKSPACE_VARIABLE: &str = "HERDR_WORKSPACE_ID";
 
 /// How long `agent start` is retried while the new pane's shell is still starting, in milliseconds.
 ///
@@ -111,6 +115,34 @@ pub struct SpawnArgs {
 }
 
 impl SpawnArgs {
+    /// The workspace a new tab opens in: the calling pane's, as herdr currently reports it.
+    ///
+    /// Asked of herdr rather than read from `HERDR_WORKSPACE_ID`. That variable is injected once, when
+    /// the pane is created, and nothing can rewrite a running shell's environment afterwards — so a
+    /// pane moved to another workspace still carries the old id and would send this tab there.
+    ///
+    /// `None` is the one case nothing can pin: no calling pane at all, which is a caller outside a
+    /// herdr session. herdr's default then applies, and it resolves to whichever workspace the *UI*
+    /// has focused — so a tab meant for this project opens wherever the human last clicked. Warned
+    /// about rather than left silent, because that outcome looks like a bug in this tool.
+    ///
+    /// # Errors
+    ///
+    /// [`SpawnError::Herdr`] if herdr cannot answer for a pane this is running in, which happens
+    /// before any surface exists.
+    fn workspace(&self, sink: &Sink) -> Result<Option<String>, SpawnError> {
+        let pane = std::env::var(PANE_VARIABLE)
+            .ok()
+            .filter(|value| !value.trim().is_empty());
+        let Some(pane) = pane else {
+            sink.warn(&format!(
+                "{PANE_VARIABLE} is unset, so this tab opens in whichever workspace herdr has focused"
+            ));
+            return Ok(None);
+        };
+        Ok(Some(surface::workspace_of(pane.trim())?))
+    }
+
     /// Whether the new surface takes the user's focus.
     fn focus(&self) -> Focus {
         if self.focus { Focus::Take } else { Focus::Leave }
@@ -145,7 +177,7 @@ impl Cmd for SpawnArgs {
         let pane = match (self.placement, anchor) {
             (Placement::Pane, Some(anchor)) => surface::split(&anchor, &cwd, self.focus())?,
             (Placement::Tab, _) => {
-                let workspace = std::env::var(WORKSPACE_VARIABLE).ok();
+                let workspace = self.workspace(sink)?;
                 surface::create_tab(workspace.as_deref(), &self.name, &cwd, self.focus())?
             }
             (Placement::Workspace, _) => surface::create_workspace(&self.name, &cwd, self.focus())?,
