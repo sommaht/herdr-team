@@ -1,6 +1,6 @@
 # herdr-agent-tools — design
 
-**Date:** 2026-07-29 · **Status:** implemented
+**Date:** 2026-07-29 · **Status:** implemented, with an amendment below that is not yet implemented
 
 ## What this is
 
@@ -436,6 +436,134 @@ the four commands above.
 its own CLI syntax** — print a command group to read it rather than guessing a flag; and never put
 prompt text or captured terminal content in an error message.
 
+## Amendment — placement, `kill`, `prime`
+
+**Status:** not yet implemented. Everything above describes what shipped; this section supersedes the
+lines it names and is the thing to build. Reconcile the body into it once it lands.
+
+Two ideas raised alongside these three were rejected, and both are recorded because the reasoning is
+the useful part:
+
+- **A `whoami` command** printing the caller's pane, tab, and workspace. Rejected because `herdr pane
+  current` already does it: with no arguments it resolves the *caller's* pane, not the focused one —
+  verified against a live unfocused pane, where it returned that pane rather than the focused one.
+  It reports `pane_id`, `tab_id`, and `workspace_id` together. This restores the Scope section's
+  original decision, which named `whoami` among the metadata commands herdr already does better.
+  `prime` carries a line pointing at it instead.
+- **A `--from <pane-id>` flag** for `spawn`, deferred rather than declined; see "Open for later".
+
+### `--placement`, superseding the synopsis at `spawn` step 1
+
+```
+spawn <NAME> [--placement pane|tab|workspace] …
+```
+
+One value flag replacing the `--pane|--tab|--workspace` group, defaulting to `pane`. `Placement`
+already exists as an enum in `herdr/surface.rs`, so a `ValueEnum` derive makes the parsed shape *be*
+the domain type instead of a boolean triple translated into it — which deletes `PlacementFlags` and
+`SpawnArgs::placement()`, about twenty-five lines, and resolves the RS-033 pressure that file's
+module doc currently justifies.
+
+The default becomes declarative (`default_value_t`) rather than the implicit `else` of an if-chain,
+and `--help` prints the possible values on one line, which also communicates the exclusivity that
+three separate bools only imply. This retires step 1's note about reporting the conflicting pair:
+`--tab --pane` is no longer expressible.
+
+The extra characters are the one cost, and they are the cost this project has already accepted for
+`herdr-agent-tools` over `herdr-agent` — length is a cost when a human types it, and an agent is the
+caller.
+
+### `kill`
+
+```
+kill <TARGET> [--force]
+```
+
+Closing an agent's pane by hand is the same two-step shape `spawn` exists to collapse: herdr's `pane
+close` takes a pane id only, while agent names are what a caller has.
+
+1. **`agent get <target>`** — one call giving both the pane id to close and the status the guard
+   reads. No second call: the resolution and the guard share one response.
+2. **The status guard, unless `--force`.** Refuse `working` and `blocked` with exit 5. Warn and
+   proceed on `unknown`; proceed silently on `idle` and `done`.
+3. **`pane close <pane-id>`.**
+
+If step 1 answers `agent_not_found`, close the target directly as a pane id and let herdr judge it.
+An agent that exited leaving its pane open is the main thing anyone wants to clean up, and refusing
+that would be perverse. Passing the target through rather than testing its shape keeps id-format
+knowledge out of this crate, and herdr's rejection of a non-pane-id propagates unchanged.
+
+The guard is the reason to build this rather than the safety rail on it. Killing a working agent
+destroys whatever it has not written to disk, and the caller is usually another agent acting on a
+lifecycle status it may have misread. It reuses the composer guard's shape exactly — exit 5,
+retryable, the same `--force` — and it fails **open** on `unknown` for the composer guard's reason:
+refusing on absent evidence is a refusal the guard never earned.
+
+### `prime`
+
+```
+prime
+```
+
+Prints a compact, agent-facing brief on driving this CLI. Written for a `SessionStart` hook, which
+sets every constraint that follows.
+
+**No herdr calls, and a missing config file is not a failure.** The hook fires before anything
+guarantees a running server, and a hook that fails is worse than one that says little. An absent or
+unreadable config prints the prose with "no presets configured" where the table goes, and exits 0.
+
+**Hand-written prose, not rendered help.** Composing it from clap's command tree was considered and
+rejected: five subcommands render past two hundred lines, and always-on context has a cost that a
+reference dump cannot justify when `--help` is one command away. What an agent cannot look up on
+demand is that the tool exists, when to reach for it, and which failures are worth retrying — so
+that is what this says, in workflow shape rather than flag shape.
+
+**The presets table is generated**, from the same `PresetList` the `presets` command renders. That
+part therefore cannot drift from what `spawn --preset` will really do, which is more than the
+hand-maintained table it replaces could promise.
+
+Four tests hold the prose honest, since a static text blob is otherwise the least-tested artifact
+here:
+
+1. Every `herdr-agent-tools <command>` named in the text resolves in the clap tree.
+2. Every flag named resolves on the command it is attributed to.
+3. Every exit code named matches `ExitStatus`.
+4. The prose stays inside a forty-line budget, so the discipline survives later edits.
+
+Tests 1–3 walk `Cli::command()`, so they fail on a rename rather than going stale. The draft:
+
+```text
+herdr-agent-tools launches and prompts herdr agents. Reach for it instead of `herdr` when
+starting one: herdr needs a pane that already exists and is sitting at a shell prompt, so
+`spawn` creates the surface and starts the agent as one step.
+
+  spawn <name> [--placement pane|tab|workspace] [--preset <p>] [--prompt <text>|-]
+  prompt <target> <text|->
+  kill <target> [--force]
+  presets
+
+A target is a unique agent name or a pane id; herdr resolves it. Your own ids come from
+`herdr pane current`.
+
+Sequencing work. `prompt` returns as soon as delivery is proven, not when the agent has
+finished — pass `--wait-until idle` to wait for a result instead. Long or generated prompt
+text goes on stdin with `-` rather than being quoted into an argument.
+
+Exit codes are a protocol, not just failure. 5 is retryable and worth retrying: a composer
+holding unsent text, or a new pane whose shell has not started yet. 3 means what you named
+does not exist and 2 means the arguments were wrong; neither improves on a retry.
+
+Two refusals you will meet. `prompt` refuses a composer holding unsent text, because
+submitting yours would submit someone's half-written message along with it. `kill` refuses
+an agent that is working or blocked. Both are exit 5, and both take `--force` when you
+mean it.
+
+Presets:
+<generated table>
+```
+
+This retires the "printed conventions block" entry in "Open for later", which is what it is.
+
 ## Open for later
 
 Kept in the README's roadmap so each stays a decision rather than an omission:
@@ -457,5 +585,12 @@ Kept in the README's roadmap so each stays a decision rather than an omission:
   Distinct from the verification `prompt` already does: `--until working` proves herdr accepted the
   text and the agent reacted, not that the agent read what it was sent.
 - Discriminating placeholder text from typed text in the composer guard, via styling attributes.
-- A skill or a printed conventions block, so an agent driving this CLI picks up the conventions
-  without being told them in every prompt.
+- **Spawning somewhere other than here.** `spawn` infers where it is from the environment, so it can
+  only split the pane it runs in, and only when it runs in one. A `--from <pane-id>` flag would let a
+  caller outside a herdr session split anyway, and one inside anchor somewhere other than itself.
+
+  A pane id is the only id worth accepting there, which is the part worth writing down: it *is* the
+  split anchor, and it *derives* the workspace a new tab opens in, so it answers both questions
+  `spawn` asks. A tab or workspace id answers strictly fewer, and an agent name fewer still — it
+  cannot name a pane that hosts no agent, and it adds `agent_not_found` and `agent_target_ambiguous`
+  to a flag whose job is purely positional.
