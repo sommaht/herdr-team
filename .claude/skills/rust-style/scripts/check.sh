@@ -14,9 +14,14 @@ FN_FLAG_LINES=50
 # File-size prompt: guides call 150-350 comfortable; 400 leaves headroom so
 # only clear outliers surface (RS-033 is a prompt to look for boundaries).
 FILE_FLAG_LINES=400
-# Duplicate-body detection ignores trivial bodies (getters, one-liners): a
-# normalized body under 60 chars is too small to count as copy-paste.
-MIN_DUP_BODY_CHARS=60
+# Duplicate-body detection ignores trivial bodies (getters, one-liners, and
+# delegations to a shared owner). The bar is statement count, not width: a body
+# of one statement is not copy-paste risk however wide that statement is — it is
+# an idiom or a call to the one owner the rule asks for, and a char threshold
+# only invites answering the finding by rewrapping a line. Counted in normalized
+# body lines, which include the closing brace, so 8 means seven statements: the
+# rule is aimed at a copied handler, not at two functions that happen to agree.
+MIN_DUP_BODY_LINES=8
 
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/rust-style-gate.XXXXXX") || exit 2
 trap 'rm -rf "$TMP"' EXIT
@@ -253,8 +258,8 @@ awk -F'\t' -v max="$FN_FLAG_LINES" \
     "$TMP/fns" >> "$TMP/prompts"
 
 # RS-034: duplicate normalized bodies.
-awk -F'\t' -v min="$MIN_DUP_BODY_CHARS" '
-    $1 == "FN" && length($8) >= min {
+awk -F'\t' -v min="$MIN_DUP_BODY_LINES" '
+    $1 == "FN" && split($8, _lines, "\x01") - 1 >= min {
         key = $8
         if (key in seen) {
             printf "RS-034 %s:%s — fn %s duplicates fn %s (%s); lift to one owner\n", $2, $3, $4, names[key], seen[key]
