@@ -313,8 +313,8 @@ parse would be unusable the first time a harness changed its rendering.
 
 ## Preset configuration
 
-`$XDG_CONFIG_HOME/herdr-agent-tools/presets.toml`, falling back to
-`~/.config/herdr-agent-tools/presets.toml`. Overridable by `--config` and by an environment variable.
+`$XDG_CONFIG_HOME/herdr-agent-tools/config.toml`, falling back to
+`~/.config/herdr-agent-tools/config.toml`. Overridable by `--config` and by an environment variable.
 
 ```toml
 default = 'reviewer'
@@ -328,8 +328,11 @@ kind = 'codex'
 args = ['--model', 'gpt-5-low', '--no-alt-screen']
 ```
 
-Three decisions here:
+Four decisions here:
 
+- **The file is named for the tool, not for its one table.** Presets are all it holds today, and
+  `presets.toml` would have to be renamed the first time a second table is added — a breaking change
+  for everyone who already has the file. `config.toml` costs nothing now and buys that room.
 - **The preset name is the table key**, which makes a duplicate name inexpressible rather than
   last-one-wins, and drops a `name` field that could disagree with nothing.
 - **`args` is an array only.** A string form would have to be split into shell words, which in Rust
