@@ -18,6 +18,7 @@ use serde::Serialize;
 use thiserror::Error;
 
 use crate::cmd::prompt::deliver;
+use crate::cmd::prompt::envelope::Reply;
 use crate::cmd::{AsExitStatus, Cmd, ExitStatus};
 use crate::config::{ConfigError, Presets};
 use crate::core::{AgentName, Backoff, NonEmptyText, PaneId, Sink};
@@ -292,7 +293,7 @@ impl SpawnArgs {
             ));
         }
 
-        let agent = deliver(pane, text, Some(&wait), sink)?;
+        let agent = deliver(pane, text, &Reply::ToSender, Some(&wait), sink)?;
         Ok(Spawned {
             placement: self.placement,
             delivered: Some(verified),

@@ -1,6 +1,6 @@
 //! `prompt` — deliver a prompt to an agent that already exists.
 
-mod envelope;
+pub(super) mod envelope;
 
 use std::fmt::Display;
 
@@ -9,6 +9,7 @@ use clap_stdin::MaybeStdin;
 use serde::Serialize;
 use thiserror::Error;
 
+use self::envelope::{Envelope, Reply};
 use crate::cmd::{AsExitStatus, Cmd, ExitStatus};
 use crate::core::{NonEmptyText, Sink};
 use crate::harness::{self, Composer};
@@ -129,7 +130,7 @@ impl Cmd for PromptArgs {
             ));
         }
 
-        let agent = deliver(&self.target, &self.text, wait.as_ref(), sink)?;
+        let agent = deliver(&self.target, &self.text, &Reply::ToSender, wait.as_ref(), sink)?;
         Ok(Delivered { delivered: Some(verified), agent })
     }
 }
@@ -155,14 +156,19 @@ impl Cmd for PromptArgs {
 pub(super) fn deliver(
     target: &str,
     text: &NonEmptyText,
+    reply: &Reply,
     wait: Option<&Wait>,
     sink: &Sink,
 ) -> Result<AgentRecord, PromptError> {
-    match agent::prompt(target, text, wait) {
+    // Resolved and rendered once, before the re-send: a second submission must deliver the same
+    // bytes as the first, and re-resolving would make a second `agent get` call to say so.
+    let text = NonEmptyText::composed(Envelope::resolve(reply, sink).wrap(text));
+
+    match agent::prompt(target, &text, wait) {
         Ok(agent) => Ok(agent),
         Err(error) if error.is_undelivered() => {
             sink.warn(&format!("{target} did not acknowledge the prompt; re-sending once"));
-            agent::prompt(target, text, wait).map_err(|error| {
+            agent::prompt(target, &text, wait).map_err(|error| {
                 if error.is_undelivered() {
                     PromptError::Stalled { target: target.to_owned() }
                 } else {
