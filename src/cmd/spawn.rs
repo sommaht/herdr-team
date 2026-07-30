@@ -1,4 +1,11 @@
 //! `spawn` — create a surface and start a preset-configured agent in it.
+//!
+//! **RS-033 resolved, not waived:** this is the longest file here because it is the longest command
+//! — five ordered steps across three placements, each of which can fail after the previous one has
+//! already changed something in herdr. It reads as one transaction and splitting it would hide that
+//! ordering, which is the exception RS-033 names. The only separable piece is [`Backoff`], and at
+//! twenty-odd lines with a single consumer RS-032 argues against minting a file for it; it moves the
+//! day a second caller wants a retry schedule.
 
 use std::fmt::Display;
 use std::path::PathBuf;
@@ -370,18 +377,39 @@ fn anchor(variable: Option<&str>) -> Result<PaneId, SpawnError> {
 ///
 /// Doubles from 250ms to a 2000ms cap, with the last delay shortened so the total lands exactly on
 /// the budget rather than overrunning it. An empty schedule means one attempt and no retry.
-fn backoff(budget_ms: u64) -> Vec<Duration> {
-    let mut delays = Vec::new();
-    let mut spent = 0;
-    let mut delay = BACKOFF_FIRST_MS;
-
-    while spent < budget_ms {
-        let step = delay.min(budget_ms - spent);
-        delays.push(Duration::from_millis(step));
-        spent += step;
-        delay = delay.saturating_mul(2).min(BACKOFF_CAP_MS);
+fn backoff(budget_ms: u64) -> Backoff {
+    Backoff {
+        remaining_ms: budget_ms,
+        next_ms: BACKOFF_FIRST_MS,
     }
-    delays
+}
+
+/// The retry schedule as a sequence: doubling delays, capped, and truncated so the total never
+/// overruns the budget.
+///
+/// An iterator rather than a collected `Vec`, because the sequence is state and a step's length
+/// depends on what is left — expressing it as `next` puts the doubling, the cap, and the truncation
+/// in one place, and the caller consumes it lazily inside its retry loop rather than paying for a
+/// schedule it will usually abandon on the second attempt.
+struct Backoff {
+    /// Budget not yet handed out; the sequence ends when it reaches zero.
+    remaining_ms: u64,
+    /// The delay this step would like, before it is truncated to what remains.
+    next_ms: u64,
+}
+
+impl Iterator for Backoff {
+    type Item = Duration;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.remaining_ms == 0 {
+            return None;
+        }
+        let step = self.next_ms.min(self.remaining_ms);
+        self.remaining_ms -= step;
+        self.next_ms = self.next_ms.saturating_mul(2).min(BACKOFF_CAP_MS);
+        Some(Duration::from_millis(step))
+    }
 }
 
 // =====================================================================================================================
@@ -473,11 +501,7 @@ mod tests {
     #[test]
     fn the_retry_window_backs_off_and_lands_exactly_on_its_budget() {
         // 250ms doubling to a 2000ms cap, truncated so the total never overruns --settle-timeout.
-        let delays: Vec<u64> = backoff(10_000)
-            .iter()
-            .map(Duration::as_millis)
-            .map(|ms| ms as u64)
-            .collect();
+        let delays: Vec<u64> = backoff(10_000).map(|delay| delay.as_millis() as u64).collect();
 
         assert_eq!(delays, [250, 500, 1000, 2000, 2000, 2000, 2000, 250]);
         assert_eq!(delays.iter().sum::<u64>(), 10_000);
@@ -485,9 +509,21 @@ mod tests {
 
     #[test]
     fn a_zero_budget_means_one_attempt_and_no_retry() {
-        assert!(backoff(0).is_empty());
-        assert_eq!(backoff(100), [Duration::from_millis(100)]);
-        assert_eq!(backoff(300), [Duration::from_millis(250), Duration::from_millis(50)]);
+        assert_eq!(backoff(0).next(), None);
+        assert_eq!(backoff(100).collect::<Vec<_>>(), [Duration::from_millis(100)]);
+        assert_eq!(
+            backoff(300).collect::<Vec<_>>(),
+            [Duration::from_millis(250), Duration::from_millis(50)]
+        );
+    }
+
+    /// The schedule is lazy: a retry loop that succeeds early pays for no delay it did not use.
+    #[test]
+    fn the_schedule_is_produced_a_step_at_a_time() {
+        let mut delays = backoff(10_000);
+        assert_eq!(delays.next(), Some(Duration::from_millis(250)));
+        assert_eq!(delays.next(), Some(Duration::from_millis(500)));
+        // The remaining 9_250ms is never computed, because nothing asked for it.
     }
 
     #[test]
