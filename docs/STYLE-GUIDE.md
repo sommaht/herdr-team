@@ -211,12 +211,21 @@ which is what `println!` would have done. Wire forms are pinned by exact-string 
 
 ## External effects
 
-Every process invocation is built from `Command` args — never an interpolated shell string.
-There is no exception: unlike a multiplexer that starts its child through a shell, herdr takes
-the agent's arguments as an argument vector, so nothing here needs shell quoting.
+Every process invocation is built from `Command` args — never an interpolated shell string. herdr
+takes the agent's arguments as an argument vector, so nothing this crate *runs* needs shell
+quoting.
 
-A preset's `args` is therefore an **array only**. A string form would have to be split into
-shell words, which means reimplementing shell word-splitting for a value handed to `Command`.
+A preset's `args` is therefore an **array only**. A string form would have to be split into shell
+words, which means reimplementing shell word-splitting for a value handed to `Command`.
+
+**The one exception is `herdr pane run`**, whose argument is a command line herdr types into a
+pane's shell. The invocation is still an argument vector — what becomes syntax is the value
+*inside* one of its arguments, and that value is caller-supplied. So the quoting rule lives in
+`herdr::surface` beside the call that needs it, in one function, and is pinned by exact-string
+tests over a hostile path: the path is single-quoted with an embedded `'` spelled `'\''`, and `cd`
+is given `--` so a path opening with a dash cannot be read as a flag. It is a wire form — it is
+what another program parses. Nowhere else builds shell text, and a second site is a design
+decision with a document, not a call someone adds.
 
 ## Tests
 
@@ -258,7 +267,8 @@ Extending the skill's sanctioned set, this repo also uses `clap` + `clap-stdin` 
 - Spawning a process, naming the `herdr` binary, or shelling out, outside the `herdr` module.
 - `println!` or `eprintln!` outside `core::sink` — a command that prints has bypassed the
   `--json` contract, and its output cannot be asserted in a test.
-- Shell-string interpolation anywhere; every process invocation is built from `Command` args.
+- Shell-string interpolation outside the one quoting function in `herdr::surface`; every process
+  invocation is built from `Command` args.
 - Process I/O in `harness`, whose contract is answering from the snapshot it is handed.
 - A prompt, a preset's arguments, or captured terminal content in an error message or a log.
 - Re-wording a herdr error, or restating a herdr response in a type of our own beyond the
