@@ -123,8 +123,8 @@ pub fn create_worktree(
 ///
 /// Returns whatever [`run`] returned.
 pub fn workspace_of(pane: &str) -> Result<String, HerdrError> {
-    let info: PaneWorkspace = run(&get_args(pane))?;
-    Ok(info.pane.workspace_id)
+    let state: PaneState = run(&get_args(pane))?;
+    Ok(state.pane.workspace_id)
 }
 
 /// Runs one command line in a pane's shell, as if a person had typed it there.
@@ -163,6 +163,22 @@ pub fn open_at(pane: &PaneId, directory: &str) -> Result<(), HerdrError> {
 pub fn repo_root(cwd: &str) -> Result<String, HerdrError> {
     let listed: WorktreeListed = run(&list_args(cwd))?;
     Ok(listed.source.repo_root)
+}
+
+/// Where a pane's shell actually is, as the pane itself reports it. `None` when herdr cannot read
+/// it.
+///
+/// Asked rather than matched against the shell's own output: the pane's report of where it is beats
+/// text a shell chose to print, which changes with the shell. This is the success signal for
+/// [`open_at`], which cannot tell on its own whether the text it sent was typed into a live prompt
+/// or into a shell that had not started yet.
+///
+/// # Errors
+///
+/// Returns whatever [`run`] returned.
+pub fn foreground_cwd(pane: &PaneId) -> Result<Option<String>, HerdrError> {
+    let state: PaneState = run(&get_args(pane))?;
+    Ok(state.pane.foreground_cwd)
 }
 
 /// Closes a pane, taking whatever was running in it.
@@ -249,20 +265,28 @@ struct WorktreeSource {
     repo_root: String,
 }
 
-/// `pane get`'s result, read only for the workspace the pane sits in.
+/// `pane get`'s result, read for the two fields two different callers branch on.
 ///
-/// A separate type from [`PaneCreated`] rather than an optional field on [`PaneRef`]: a creation
+/// A separate type from [`PaneCreated`] rather than optional fields on [`PaneRef`]: a creation
 /// response does not report a workspace at all, and one struct spanning both would make the field
-/// optional in the one place it is required.
+/// optional in the one place it is required. One type for both readers of *this* command, though —
+/// two structs over one response would be two places to revise when herdr adds a field either wants.
 #[derive(Debug, Deserialize)]
-struct PaneWorkspace {
-    pane: WorkspaceRef,
+struct PaneState {
+    pane: PaneFields,
 }
 
-/// The one field a `pane get` is made for here.
+/// The two fields a `pane get` is made for here.
 #[derive(Debug, Deserialize)]
-struct WorkspaceRef {
+struct PaneFields {
+    /// The workspace the pane currently sits in — see [`workspace_of`].
     workspace_id: String,
+    /// Where the pane's shell actually is, absent when herdr cannot read it.
+    ///
+    /// `#[serde(default)]` because herdr omits the field rather than sending `null`, and because
+    /// [`workspace_of`] predates it and must keep parsing a response that has none.
+    #[serde(default)]
+    foreground_cwd: Option<String>,
 }
 
 // =====================================================================================================================
@@ -339,6 +363,9 @@ fn worktree_args(label: &str, source: &str, branch: Option<&str>, base: Option<&
 }
 
 /// `herdr pane get <PANE>`.
+///
+/// One call with two readers: [`workspace_of`] wants the workspace, [`foreground_cwd`] wants the
+/// shell's directory.
 fn get_args(pane: &str) -> Vec<String> {
     ["pane", "get", pane].map(str::to_owned).to_vec()
 }
@@ -592,15 +619,31 @@ mod tests {
     /// workspace keeps the old id, so a tab spawned from it would open in the workspace it *used* to
     /// be in — verified live, where `pane get` reported the new workspace after a move while the
     /// variable could not have.
+    ///
+    /// The same response answers a second question now: `foreground_cwd` is where the pane's shell
+    /// actually is, which is how the worktree placement step learns whether its `cd` landed.
     #[test]
-    fn a_pane_get_is_read_only_for_the_workspace_and_ignores_the_rest() {
-        let info: PaneWorkspace = serde_json::from_str(
+    fn a_pane_get_reports_both_the_workspace_and_where_its_shell_actually_is() {
+        let state: PaneState = serde_json::from_str(
             r#"{"pane":{"agent":"claude","agent_status":"working","cwd":"/work","focused":false,
-                "pane_id":"wJ:p1","revision":20,"tab_id":"wJ:t1","workspace_id":"wJ"}}"#,
+            "foreground_cwd":"/work/repo/src","pane_id":"wJ:p1","revision":20,"tab_id":"wJ:t1",
+            "workspace_id":"wJ"}}"#,
         )
         .unwrap();
 
-        assert_eq!(info.pane.workspace_id, "wJ");
+        assert_eq!(state.pane.workspace_id, "wJ");
+        assert_eq!(state.pane.foreground_cwd.as_deref(), Some("/work/repo/src"));
+    }
+
+    #[test]
+    fn a_pane_whose_foreground_directory_herdr_cannot_read_answers_nothing_rather_than_failing() {
+        // herdr omits the field rather than sending null, and `workspace_of` predates it entirely — so
+        // a response without it has to parse, or the older caller breaks on the newer field.
+        let state: PaneState =
+            serde_json::from_str(r#"{"pane":{"pane_id":"wJ:p1","tab_id":"wJ:t1","workspace_id":"wJ"}}"#).unwrap();
+
+        assert_eq!(state.pane.workspace_id, "wJ");
+        assert_eq!(state.pane.foreground_cwd, None);
     }
 
     #[test]
