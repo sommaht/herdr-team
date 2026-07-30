@@ -63,8 +63,10 @@ pub fn split(pane: &PaneId, cwd: &str, focus: Focus) -> Result<PaneId, HerdrErro
 /// # Errors
 ///
 /// Returns whatever [`run`] returned.
-pub fn create_tab(label: &AgentName, cwd: &str, focus: Focus) -> Result<PaneId, HerdrError> {
-    let created: RootPaneCreated = run(&tab_args(label, cwd, focus))?;
+/// `workspace` pins where the tab opens; see [`tab_args`] for why it is not left to herdr's
+/// default. `None` when the caller has no workspace of its own to name.
+pub fn create_tab(workspace: Option<&str>, label: &AgentName, cwd: &str, focus: Focus) -> Result<PaneId, HerdrError> {
+    let created: RootPaneCreated = run(&tab_args(workspace, label, cwd, focus))?;
     Ok(created.root_pane.pane_id)
 }
 
@@ -125,11 +127,21 @@ fn split_args(pane: &str, cwd: &str, focus: Focus) -> Vec<String> {
     .to_vec()
 }
 
-/// `herdr tab create --cwd <CWD> --label <LABEL> --(no-)focus`.
-fn tab_args(label: &str, cwd: &str, focus: Focus) -> Vec<String> {
-    ["tab", "create", "--cwd", cwd, "--label", label, focus.flag()]
-        .map(str::to_owned)
-        .to_vec()
+/// `herdr tab create [--workspace <ID>] --cwd <CWD> --label <LABEL> --(no-)focus`.
+///
+/// `--workspace` is passed whenever the caller's own is known, for the same reason `split` names
+/// `$HERDR_PANE_ID` rather than herdr's `--current`: omitting it makes herdr resolve the workspace
+/// server-side to whichever one is *UI-focused*, which is not the caller's whenever the human has
+/// clicked elsewhere. A tab meant for this project then opens in whatever the user was last
+/// looking at. Absent the variable there is nothing to pin, and herdr's own default stands.
+fn tab_args(workspace: Option<&str>, label: &str, cwd: &str, focus: Focus) -> Vec<String> {
+    let mut args = vec!["tab".to_owned(), "create".to_owned()];
+    if let Some(workspace) = workspace {
+        args.push("--workspace".to_owned());
+        args.push(workspace.to_owned());
+    }
+    args.extend(["--cwd", cwd, "--label", label, focus.flag()].map(str::to_owned));
+    args
 }
 
 /// `herdr workspace create --cwd <CWD> --label <LABEL> --(no-)focus`.
@@ -167,10 +179,34 @@ mod tests {
         );
     }
 
+    /// A tab is pinned to the caller's workspace, never left to herdr's focus-dependent default.
+    ///
+    /// Regression: without `--workspace`, herdr resolves the workspace server-side to whichever one
+    /// the UI has focused. A rehearsal launch opened its tab in an unrelated project's workspace
+    /// because the human had clicked there — the same trap `split` avoids by naming
+    /// `$HERDR_PANE_ID` instead of `--current`.
+    #[test]
+    fn a_tab_names_the_callers_own_workspace_when_it_has_one() {
+        assert_eq!(
+            tab_args(Some("w7"), "reviewer", "/work/repo", Focus::Leave),
+            [
+                "tab",
+                "create",
+                "--workspace",
+                "w7",
+                "--cwd",
+                "/work/repo",
+                "--label",
+                "reviewer",
+                "--no-focus"
+            ]
+        );
+    }
+
     #[test]
     fn a_tab_and_a_workspace_are_labelled_with_the_agents_name() {
         assert_eq!(
-            tab_args("reviewer", "/work/repo", Focus::Leave),
+            tab_args(None, "reviewer", "/work/repo", Focus::Leave),
             [
                 "tab",
                 "create",
@@ -200,7 +236,7 @@ mod tests {
         // Opt-in: a tool meant to be driven by agents should not steal the human's focus. Stated
         // explicitly in both directions so the argument vector says what it means.
         assert_eq!(split_args("w4:p1", "/w", Focus::Take).last().unwrap(), "--focus");
-        assert_eq!(tab_args("reviewer", "/w", Focus::Take).last().unwrap(), "--focus");
+        assert_eq!(tab_args(None, "reviewer", "/w", Focus::Take).last().unwrap(), "--focus");
         assert_eq!(workspace_args("reviewer", "/w", Focus::Take).last().unwrap(), "--focus");
     }
 
