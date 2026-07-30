@@ -1,12 +1,13 @@
 //! The executable subcommands, their side-effect ordering, and the exit-status contract.
 //!
-//! There is deliberately no parent grouping: three sibling commands share no distinction a parent
-//! would mark.
+//! There is deliberately no parent grouping: these siblings share no distinction a parent would mark.
 
+mod kill;
 mod presets;
 mod prompt;
 mod spawn;
 
+pub use kill::KillArgs;
 pub use presets::PresetsArgs;
 pub use prompt::PromptArgs;
 pub use spawn::SpawnArgs;

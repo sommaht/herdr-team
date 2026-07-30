@@ -12,13 +12,19 @@ on stdin.
 | ------- | ------- |
 | `spawn` | Create a pane, tab, or workspace and start a preset-configured agent in it |
 | `prompt` | Deliver a prompt to an agent that already exists |
+| `kill` | Close an agent's pane, refusing one that is mid-task |
 | `presets` | List what the preset config holds |
 
 ```
 herdr-agent-tools spawn reviewer --placement tab --preset opus --prompt "Review the branch"
 git diff | herdr-agent-tools prompt reviewer -
+herdr-agent-tools kill reviewer
 herdr-agent-tools presets
 ```
+
+`prompt` and `kill` each refuse one thing by default, and `--force` is the override for both: a
+composer holding someone's unsent text, and an agent still working or blocked. Neither refusal
+changes anything, and both exit 5.
 
 ## Presets
 
@@ -75,5 +81,8 @@ Each of these is a decision to defer, not an oversight.
 - **Spawning somewhere other than here** — `spawn` infers where it is from the environment, so it
   can only split the pane it runs in, and only when it runs in one. A flag naming a pane would let a
   caller outside a session split anyway, and one inside anchor somewhere other than itself.
+- **Ending an agent while keeping its pane** — `kill` closes the pane, so the seat goes with the
+  agent. Reusing a warm seat would skip the slowest part of a launch, but every route to it means
+  either reporting state to herdr on a harness's behalf or sending harness-specific keys.
 - **A conventions block** — so an agent driving this CLI picks the conventions up without being
   told them in every prompt.

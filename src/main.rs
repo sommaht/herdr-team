@@ -14,7 +14,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
-use crate::cmd::{AsExitStatus, Cmd, ExitStatus, Failure, PresetsArgs, PromptArgs, SpawnArgs};
+use crate::cmd::{AsExitStatus, Cmd, ExitStatus, Failure, KillArgs, PresetsArgs, PromptArgs, SpawnArgs};
 use crate::core::{OutputMode, Sink};
 
 // =====================================================================================================================
@@ -31,8 +31,8 @@ use crate::core::{OutputMode, Sink};
         herdr starts an agent only in a pane that already exists and is sitting at an interactive \
         shell prompt, so launching one by hand is two steps. `spawn` does both: it creates a pane, \
         tab, or workspace, reads back the new pane's id, and starts a preset-configured agent in \
-        it. `prompt` delivers text to an agent that already exists, and `presets` lists what the \
-        config file holds.\n\
+        it. `prompt` delivers text to an agent that already exists, `kill` closes an agent's pane \
+        unless it is mid-task, and `presets` lists what the config file holds.\n\
         \n\
         Run `herdr-agent-tools <command> --help` for details and examples.",
     after_help = "Exit codes:\n  \
@@ -57,6 +57,7 @@ struct Cli {
 enum Command {
     Spawn(SpawnArgs),
     Prompt(PromptArgs),
+    Kill(KillArgs),
     Presets(PresetsArgs),
 }
 
@@ -74,6 +75,7 @@ fn main() -> ExitCode {
     match cli.command {
         Command::Spawn(args) => run(args, &sink),
         Command::Prompt(args) => run(args, &sink),
+        Command::Kill(args) => run(args, &sink),
         Command::Presets(args) => run(args, &sink),
     }
 }
