@@ -4,11 +4,6 @@
 //! [`run`], [`run_text`], and the stream discipline both depend on; `surface` owns the three ways to
 //! make a pane and `agent` owns what a command does to an agent in one.
 
-#![allow(
-    dead_code,
-    reason = "the submodules arrive in Task 8 and their callers in Tasks 10 and 11"
-)]
-
 pub mod agent;
 pub mod surface;
 
