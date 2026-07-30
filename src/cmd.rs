@@ -5,9 +5,11 @@
 
 mod presets;
 mod prompt;
+mod spawn;
 
 pub use presets::PresetsArgs;
 pub use prompt::PromptArgs;
+pub use spawn::SpawnArgs;
 
 use std::fmt::Display;
 

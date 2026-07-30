@@ -11,8 +11,6 @@
 //! only by holding a read every command answers from, and there is none. Loading anything eagerly
 //! would also be wrong: a malformed preset file would then break `prompt`, which never reads one.
 
-#![allow(dead_code, reason = "the first callers land in Tasks 6 through 11")]
-
 mod sink;
 
 pub use sink::{OutputMode, Sink};

@@ -3,8 +3,6 @@
 //! The only disk I/O in the crate, which is the boundary this module names. Nothing here is loaded
 //! eagerly: `prompt` never reads a preset, and a malformed file must not break it.
 
-#![allow(dead_code, reason = "wired into `presets` in Task 6 and `spawn` in Task 11")]
-
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
