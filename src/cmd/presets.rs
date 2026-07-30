@@ -21,7 +21,7 @@ use crate::core::Sink;
 #[derive(Debug, Args)]
 #[command(after_help = "Examples:\n  \
     herdr-agent-tools presets\n  \
-    herdr-agent-tools presets --config ./presets.toml --json")]
+    herdr-agent-tools presets --config ./config.toml --json")]
 pub struct PresetsArgs {
     /// Read this preset file instead of the one in the config directory.
     #[arg(long, value_name = "PATH")]

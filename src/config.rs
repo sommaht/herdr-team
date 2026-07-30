@@ -25,7 +25,11 @@ const PATH_VARIABLE: &str = "HERDR_AGENT_TOOLS_CONFIG";
 /// This tool's own directory, not a second file inside herdr's: a public tool should not squat a
 /// filename in another project's config directory, where it would break the day that project
 /// claims the name.
-const RELATIVE_PATH: &str = "herdr-agent-tools/presets.toml";
+///
+/// Named `config.toml` rather than `presets.toml` because presets are what it holds *today*.
+/// A filename that names one table is a filename that has to change the first time a second
+/// table is added, and renaming a config file is a breaking change for everyone who has one.
+const RELATIVE_PATH: &str = "herdr-agent-tools/config.toml";
 
 /// What a working preset file looks like, quoted back when none was found.
 const EXAMPLE: &str = "\
@@ -235,7 +239,7 @@ kind = 'codex'
     /// A preset file in a temp directory the test owns.
     fn written(contents: &str) -> (tempfile::TempDir, PathBuf) {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("presets.toml");
+        let path = directory.path().join("config.toml");
         fs::write(&path, contents).unwrap();
         (directory, path)
     }
@@ -312,7 +316,7 @@ kind = 'codex'
 
     #[test]
     fn the_search_order_is_explicit_then_the_environment_then_xdg_then_home() {
-        let explicit = PathBuf::from("/explicit/presets.toml");
+        let explicit = PathBuf::from("/explicit/config.toml");
 
         assert_eq!(
             discover(
@@ -334,11 +338,11 @@ kind = 'codex'
         );
         assert_eq!(
             discover(None, None, Some("/xdg".as_ref()), Some("/home".as_ref())),
-            Some(PathBuf::from("/xdg/herdr-agent-tools/presets.toml"))
+            Some(PathBuf::from("/xdg/herdr-agent-tools/config.toml"))
         );
         assert_eq!(
             discover(None, None, None, Some("/home".as_ref())),
-            Some(PathBuf::from("/home/.config/herdr-agent-tools/presets.toml"))
+            Some(PathBuf::from("/home/.config/herdr-agent-tools/config.toml"))
         );
         assert_eq!(discover(None, None, None, None), None);
     }

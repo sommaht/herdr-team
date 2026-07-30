@@ -22,9 +22,12 @@ herdr-agent-tools presets
 
 ## Presets
 
-`$XDG_CONFIG_HOME/herdr-agent-tools/presets.toml`, falling back to
-`~/.config/herdr-agent-tools/presets.toml`. Override the location with `--config` or with
+`$XDG_CONFIG_HOME/herdr-agent-tools/config.toml`, falling back to
+`~/.config/herdr-agent-tools/config.toml`. Override the location with `--config` or with
 `HERDR_AGENT_TOOLS_CONFIG`.
+
+Presets are what the file holds today, and the filename deliberately does not say so: a name
+that names one table has to change the first time a second one is added.
 
 ```toml
 default = 'reviewer'

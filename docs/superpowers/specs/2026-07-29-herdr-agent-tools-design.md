@@ -1,6 +1,6 @@
 # herdr-agent-tools — design
 
-**Date:** 2026-07-29 · **Status:** approved, not implemented
+**Date:** 2026-07-29 · **Status:** implemented
 
 ## What this is
 
@@ -437,8 +437,22 @@ prompt text or captured terminal content in an error message.
 
 Kept in the README's roadmap so each stays a decision rather than an omission:
 
-- Inter-agent messaging with an envelope carrying the sender's identity and a reply path.
-- Witnessed delivery — proving a message was received rather than that it was submitted.
+- **Inter-agent messaging with an envelope carrying the sender's identity and a reply path.** Not
+  polish on `prompt` — a different job, and the distinction is worth stating because it decides
+  when this becomes necessary rather than nice.
+
+  A lifecycle wait tells a caller **when**: it needs no cooperation from the agent, works on one
+  that was never told a reply path exists, and cannot be forgotten. It carries no content. An
+  envelope with a `reply with:` line tells a caller **what**, at the cost of an explicit
+  instruction in the prompt and a recipient that honors it.
+
+  Everything this MVP dispatches is work whose result lands on disk or in git, so the artifact
+  *is* the reply and the caller verifies it directly — the wait suffices. Dispatch a *question*
+  instead of a task, and the wait reports only that the agent stopped; without a reply path the
+  caller is back to scraping a pane for the answer. That is the boundary this feature sits on.
+- **Witnessed delivery — proving a message was received rather than that it was submitted.**
+  Distinct from the verification `prompt` already does: `--until working` proves herdr accepted the
+  text and the agent reacted, not that the agent read what it was sent.
 - Discriminating placeholder text from typed text in the composer guard, via styling attributes.
 - A skill or a printed conventions block, so an agent driving this CLI picks up the conventions
   without being told them in every prompt.
