@@ -101,14 +101,8 @@ impl PromptArgs {
     }
 
     /// Where this message says a reply should go.
-    ///
-    /// The two flags conflict at parse time, so the order these arms are read in cannot matter.
     fn reply(&self) -> Reply {
-        match (&self.reply_to, self.no_reply) {
-            (Some(target), _) => Reply::To(target.clone()),
-            (None, true) => Reply::None,
-            (None, false) => Reply::ToSender,
-        }
+        Reply::from_flags(self.reply_to.as_deref(), self.no_reply)
     }
 }
 
@@ -336,7 +330,10 @@ mod tests {
     fn no_reply_produces_a_message_that_closes_the_loop() {
         // The tail hands the replier this flag, so termination needs no memory: the replier runs the
         // line it was given rather than recalling a convention.
-        assert_eq!(parse(&["prompt", "reviewer", "done", "--no-reply"]).reply(), Reply::None);
+        assert_eq!(
+            parse(&["prompt", "reviewer", "done", "--no-reply"]).reply(),
+            Reply::None
+        );
     }
 
     #[test]
@@ -352,8 +349,7 @@ mod tests {
         // One names an address the other deletes, so passing both is a caller that has not decided.
         // clap answers this with its own usage code, which is the 2 this crate's contract already uses.
         assert!(
-            Harness::try_parse_from(["prompt", "reviewer", "go", "--no-reply", "--reply-to", "collector"])
-                .is_err()
+            Harness::try_parse_from(["prompt", "reviewer", "go", "--no-reply", "--reply-to", "collector"]).is_err()
         );
     }
 

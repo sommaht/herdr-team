@@ -150,15 +150,11 @@ impl SpawnArgs {
 
     /// Where the first prompt says a reply should go.
     ///
-    /// Repeated rather than shared with `prompt`: the two structs are clap parsers first, and a
-    /// flattened group would put both commands' flags in one help section for the sake of four
-    /// lines.
+    /// The flags are declared here rather than flattened in from `prompt` — a shared group would put
+    /// both commands' flags in one help section — but the decision they encode is
+    /// [`Reply::from_flags`]'s, so a first prompt cannot mean something different by them.
     fn reply(&self) -> Reply {
-        match (&self.reply_to, self.no_reply) {
-            (Some(target), _) => Reply::To(target.clone()),
-            (None, true) => Reply::None,
-            (None, false) => Reply::ToSender,
-        }
+        Reply::from_flags(self.reply_to.as_deref(), self.no_reply)
     }
 
     /// Whether the new surface takes the user's focus.
@@ -632,7 +628,15 @@ mod tests {
     #[test]
     fn a_fan_out_can_route_every_workers_report_at_one_collector() {
         assert_eq!(
-            parse(&["spawn", "worker", "--prompt", "audit the CLI", "--reply-to", "collector"]).reply(),
+            parse(&[
+                "spawn",
+                "worker",
+                "--prompt",
+                "audit the CLI",
+                "--reply-to",
+                "collector"
+            ])
+            .reply(),
             Reply::To("collector".to_owned())
         );
     }
@@ -649,7 +653,13 @@ mod tests {
     fn spawn_refuses_the_two_reply_flags_together_the_same_way_prompt_does() {
         assert!(
             Harness::try_parse_from([
-                "spawn", "worker", "--prompt", "go", "--no-reply", "--reply-to", "collector"
+                "spawn",
+                "worker",
+                "--prompt",
+                "go",
+                "--no-reply",
+                "--reply-to",
+                "collector"
             ])
             .is_err()
         );
