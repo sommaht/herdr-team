@@ -5,7 +5,7 @@ use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
 
 use crate::core::{AgentName, PaneId};
-use crate::herdr::{HerdrError, run};
+use crate::herdr::{HerdrError, run, run_text};
 
 // =====================================================================================================================
 // Placement
@@ -141,13 +141,16 @@ pub fn workspace_of(pane: &str) -> Result<String, HerdrError> {
 ///
 /// # Errors
 ///
-/// Returns whatever [`run`] returned. Note what a success does *not* mean: herdr types the text and
-/// presses Enter without checking that the shell has reached its prompt, so text sent too early is
-/// lost outright. The caller confirms the outcome with [`foreground_cwd`] rather than assuming this
-/// landed.
+/// Returns whatever [`run_text`] returned. Note what a success does *not* mean: herdr types the text
+/// and presses Enter without checking that the shell has reached its prompt, so text sent too early
+/// is lost outright. The caller confirms the outcome with [`foreground_cwd`] rather than assuming
+/// this landed.
 pub fn open_at(pane: &PaneId, directory: &str) -> Result<(), HerdrError> {
-    // herdr answers `{"type":"ok"}`. That the text was sent is the whole result.
-    run::<IgnoredAny>(&run_args(pane, directory))?;
+    // [`run_text`] rather than [`run`], because this command answers with an exit status and no body
+    // at all — where `pane close` prints an envelope, this prints nothing. Read as an envelope it
+    // fails on empty stdout, and the spawn then reports a failure for a `cd` that actually landed.
+    // Found in rehearsal against a live session; that the text was sent is the whole result.
+    run_text(&run_args(pane, directory))?;
     Ok(())
 }
 
@@ -713,6 +716,22 @@ mod tests {
             run_args("w9:p1", "-rf").last().unwrap(),
             "cd -- '-rf'",
             "a path opening with a dash is a path"
+        );
+    }
+
+    /// `pane run` answers with an exit status and no body, which is why [`open_at`] does not use
+    /// [`run`].
+    ///
+    /// Regression, found in rehearsal against a live session: herdr has two answer shapes, and this
+    /// command uses the silent one — where `pane close` prints an envelope, `pane run` prints
+    /// nothing at all and exits 0. Read as an envelope it fails on empty stdout, so a spawn reported
+    /// a failure for a `cd` that had actually landed. [`run_text`] checks the exit status without
+    /// demanding a body, which is the whole difference.
+    #[test]
+    fn a_pane_run_answers_with_no_body_at_all_which_is_why_it_is_not_read_as_one() {
+        assert!(
+            serde_json::from_str::<IgnoredAny>("").is_err(),
+            "an empty answer is not an envelope, and reading it as one is the bug this pins"
         );
     }
 
