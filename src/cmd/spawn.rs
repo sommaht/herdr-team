@@ -356,6 +356,39 @@ impl SpawnArgs {
 }
 
 // =====================================================================================================================
+// Placement
+// =====================================================================================================================
+
+/// Why an agent could not be started in the subdirectory the caller asked for.
+///
+/// Neither is a failure. By the time either is knowable the checkout exists, and this crate does not
+/// tear down what it created — the same reason a failure after a surface exists leaves the pane open
+/// and names it. A worktree deleted to report a directory that was gitignored anyway is a worse
+/// answer than one that works from the root and says so.
+///
+/// One type for both because they share a wording rule: name the directory that was missed and carry
+/// nothing else. The checkout path is the result line's to report.
+#[derive(Clone, Copy, Debug)]
+enum Unplaced {
+    /// The directory is not in the fresh checkout: gitignored, untracked, or absent from `--base`.
+    Absent,
+    /// The pane's shell never reached the directory inside the settle window.
+    NeverArrived,
+}
+
+impl Unplaced {
+    /// What the caller is told.
+    fn warning(self, directory: &str) -> String {
+        match self {
+            Self::Absent => format!("{directory} is not in the new checkout, so the agent starts at its root"),
+            Self::NeverArrived => {
+                format!("the new pane never reached {directory}, so the agent starts at the checkout root")
+            }
+        }
+    }
+}
+
+// =====================================================================================================================
 // Output
 // =====================================================================================================================
 
@@ -532,6 +565,16 @@ fn relative_to(repo_root: &str, cwd: &str) -> Option<String> {
     } else {
         Some(relative.to_string_lossy().into_owned())
     }
+}
+
+/// The directory in a fresh checkout to open at, or `None` when the checkout does not have it.
+///
+/// One `is_dir` rather than a process, a herdr call, or a read of the shell's own error text: the
+/// checkout is local and so is this tool. Answered before anything is typed into the pane, which is
+/// what keeps the two failures apart — the retry loop that follows only ever waits for a shell.
+fn target_in(checkout: &str, relative: &str) -> Option<PathBuf> {
+    let target = Path::new(checkout).join(relative);
+    target.is_dir().then_some(target)
 }
 
 // =====================================================================================================================
@@ -826,6 +869,56 @@ mod tests {
     fn a_directory_that_only_looks_like_a_prefix_of_the_root_is_not_inside_it() {
         assert_eq!(relative_to("/work/repo", "/work/repository/src"), None);
         assert_eq!(relative_to("/work/repo", "/work/trees/repo-8e01/src"), None);
+    }
+
+    #[test]
+    fn a_subdirectory_the_fresh_checkout_does_not_have_falls_back_to_the_checkout_root() {
+        // Absent because it is gitignored, untracked, or not in the ref `--base` named. `None` *is* the
+        // checkout root: it skips the placement step, and the pane herdr made already opens there.
+        let checkout = tempfile::tempdir().unwrap();
+
+        assert_eq!(target_in(&checkout.path().to_string_lossy(), "src/api"), None);
+    }
+
+    #[test]
+    fn a_subdirectory_the_fresh_checkout_does_have_is_where_the_pane_is_sent() {
+        let checkout = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(checkout.path().join("src/api")).unwrap();
+
+        assert_eq!(
+            target_in(&checkout.path().to_string_lossy(), "src/api"),
+            Some(checkout.path().join("src/api"))
+        );
+
+        // A file of that name is not a directory to `cd` into either.
+        std::fs::write(checkout.path().join("README.md"), "x").unwrap();
+        assert_eq!(target_in(&checkout.path().to_string_lossy(), "README.md"), None);
+    }
+
+    /// Both warnings name the directory that was missed, and neither carries anything else.
+    ///
+    /// The checkout path is deliberately absent: the result line already reports it, and a warning that
+    /// repeats it is noise on the one line a caller reads. What a caller cannot get anywhere else is
+    /// which directory it asked for and did not get.
+    #[test]
+    fn both_warnings_name_the_directory_that_was_missed_and_carry_nothing_else() {
+        assert_eq!(
+            Unplaced::Absent.warning("src/api"),
+            "src/api is not in the new checkout, so the agent starts at its root"
+        );
+        assert_eq!(
+            Unplaced::NeverArrived.warning("src/api"),
+            "the new pane never reached src/api, so the agent starts at the checkout root"
+        );
+
+        for warning in [Unplaced::Absent, Unplaced::NeverArrived] {
+            let rendered = warning.warning("src/api");
+            assert!(rendered.contains("src/api"), "{rendered}");
+            assert!(
+                !rendered.contains("/work/trees"),
+                "the checkout path is the result line's to report, not a warning's"
+            );
+        }
     }
 
     #[test]
