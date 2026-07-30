@@ -479,13 +479,23 @@ caller.
 kill <TARGET> [--force]
 ```
 
-Closing an agent's pane by hand is the same two-step shape `spawn` exists to collapse: herdr's `pane
-close` takes a pane id only, while agent names are what a caller has.
+**This is `pane close` that refuses to destroy work in progress.** herdr's own `pane close` takes a
+pane id and no flags at all: no confirmation, no guard, nothing between a misread status and lost
+work. That refusal is the whole product, and the precedent is `prompt`, which is accepted on exactly
+this bargain — `herdr agent prompt` is also one command, and `prompt` earns its keep by declining to
+submit into a composer someone is typing in, not by saving keystrokes.
+
+Two things make the hazard worse here than in the composer's case. Submitting into an occupied
+composer is recoverable, since the text is still on screen; killing a working agent loses whatever it
+has not written to disk. And the caller is usually another agent acting on a lifecycle status it may
+have misread — the one kind of caller that cannot look at the screen and think twice.
 
 1. **`agent get <target>`** — one call giving both the pane id to close and the status the guard
    reads. No second call: the resolution and the guard share one response.
 2. **The status guard, unless `--force`.** Refuse `working` and `blocked` with exit 5. Warn and
-   proceed on `unknown`; proceed silently on `idle` and `done`.
+   proceed on `unknown`; proceed silently on `idle` and `done`. It reuses the composer guard's shape
+   exactly — exit 5, retryable, the same `--force` — and it fails **open** on `unknown` for that
+   guard's reason: refusing on absent evidence is a refusal the guard never earned.
 3. **`pane close <pane-id>`.**
 
 If step 1 answers `agent_not_found`, close the target directly as a pane id and let herdr judge it.
@@ -493,11 +503,18 @@ An agent that exited leaving its pane open is the main thing anyone wants to cle
 that would be perverse. Passing the target through rather than testing its shape keeps id-format
 knowledge out of this crate, and herdr's rejection of a non-pane-id propagates unchanged.
 
-The guard is the reason to build this rather than the safety rail on it. Killing a working agent
-destroys whatever it has not written to disk, and the caller is usually another agent acting on a
-lifecycle status it may have misread. It reuses the composer guard's shape exactly — exit 5,
-retryable, the same `--force` — and it fails **open** on `unknown` for the composer guard's reason:
-refusing on absent evidence is a refusal the guard never earned.
+Collapsing name resolution into the same command is a **side benefit, not the reason.** `spawn`
+prints the new pane's id, so the caller most likely to kill an agent already has what `pane close`
+wants; resolution only helps a caller that has a name and lost the id, and `agent list` hands out ids
+too.
+
+**Named `kill` rather than `stop`, despite the guard.** The guard is a precondition, not a change of
+semantics: with `--force`, and on `idle`/`done`/`unknown` without one, the agent dies and its pane
+disappears. Guards do not soften verbs — `rm` refuses a directory without `-r` and is still `rm`. And
+`stop` would mis-suggest twice: it implies an inverse, as `docker stop` and `systemctl stop` both
+have, where this operation has none; and *ending an agent while leaving its pane* is a real, separate
+thing in herdr's vocabulary that this is not. The alarming name is also part of the guard, since
+`prime` puts this synopsis in front of every agent that reads it.
 
 ### `prime`
 
@@ -594,3 +611,12 @@ Kept in the README's roadmap so each stays a decision rather than an omission:
   `spawn` asks. A tab or workspace id answers strictly fewer, and an agent name fewer still — it
   cannot name a pane that hosts no agent, and it adds `agent_not_found` and `agent_target_ambiguous`
   to a flag whose job is purely positional.
+- **Ending an agent while keeping its pane.** `kill` closes the pane, so the seat goes with the agent.
+  A variant that ends the agent and leaves its pane at a shell prompt would let a caller reuse a warm
+  seat instead of paying `spawn`'s settle race again, which is the slowest part of a launch.
+
+  Deferred because both routes to it are bad. `pane release-agent` takes `--source` and `--agent`
+  because it is how a harness reports *its own* state to herdr, so calling it from outside means
+  lying to herdr about state that is not ours to report. Ending the process while keeping the shell
+  means sending harness-specific keys, which is precisely the per-harness mechanism the `harness`
+  module exists to keep down to one character. This is the one place `stop` would be the right name.
