@@ -33,6 +33,19 @@ impl AgentHarness for Codex {
     fn hook(&self, context: &str) -> Result<String, serde_json::Error> {
         super::session_start(context)
     }
+
+    /// `--model` is a flag; effort is not, and reaches Codex as a config override —
+    /// `-c model_reasoning_effort=xhigh`.
+    fn tuning(&self, model: Option<&str>, effort: Option<&str>) -> Vec<String> {
+        let mut flags = Vec::new();
+        if let Some(model) = model {
+            flags.extend(["--model".to_owned(), model.to_owned()]);
+        }
+        if let Some(effort) = effort {
+            flags.extend(["-c".to_owned(), format!("model_reasoning_effort={effort}")]);
+        }
+        flags
+    }
 }
 
 // =====================================================================================================================
@@ -60,5 +73,20 @@ mod tests {
     #[test]
     fn claudes_marker_is_not_this_harnesss_to_read() {
         assert_eq!(Codex.composer_occupied(&["❯ a claude draft"]), None);
+    }
+
+    /// The reason this is a method rather than one shared spelling: Codex has no effort flag, so the
+    /// same field reaches it as a config override.
+    #[test]
+    fn effort_reaches_codex_as_a_config_override_rather_than_a_flag() {
+        assert_eq!(
+            Codex.tuning(Some("gpt-5.6-sol"), Some("xhigh")),
+            ["--model", "gpt-5.6-sol", "-c", "model_reasoning_effort=xhigh"]
+        );
+        assert_eq!(
+            Codex.tuning(None, Some("medium")),
+            ["-c", "model_reasoning_effort=medium"]
+        );
+        assert!(Codex.tuning(None, None).is_empty());
     }
 }

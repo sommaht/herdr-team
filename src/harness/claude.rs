@@ -28,6 +28,18 @@ impl AgentHarness for ClaudeCode {
     fn hook(&self, context: &str) -> Result<String, serde_json::Error> {
         super::session_start(context)
     }
+
+    /// Both are plain flags: `--model opus --effort xhigh`.
+    fn tuning(&self, model: Option<&str>, effort: Option<&str>) -> Vec<String> {
+        let mut flags = Vec::new();
+        if let Some(model) = model {
+            flags.extend(["--model".to_owned(), model.to_owned()]);
+        }
+        if let Some(effort) = effort {
+            flags.extend(["--effort".to_owned(), effort.to_owned()]);
+        }
+        flags
+    }
 }
 
 // =====================================================================================================================
@@ -43,6 +55,21 @@ mod tests {
         assert_eq!(ClaudeCode.composer_occupied(&["❯"]), Some(false));
         assert_eq!(ClaudeCode.composer_occupied(&["❯ "]), Some(false));
         assert_eq!(ClaudeCode.composer_occupied(&["❯ half a thought"]), Some(true));
+    }
+
+    #[test]
+    fn model_and_effort_are_both_plain_flags_on_this_cli() {
+        assert_eq!(
+            ClaudeCode.tuning(Some("opus"), Some("xhigh")),
+            ["--model", "opus", "--effort", "xhigh"]
+        );
+    }
+
+    #[test]
+    fn either_half_stands_alone_and_neither_yields_nothing() {
+        assert_eq!(ClaudeCode.tuning(Some("opus"), None), ["--model", "opus"]);
+        assert_eq!(ClaudeCode.tuning(None, Some("xhigh")), ["--effort", "xhigh"]);
+        assert!(ClaudeCode.tuning(None, None).is_empty());
     }
 
     #[test]
