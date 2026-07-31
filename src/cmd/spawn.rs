@@ -85,7 +85,7 @@ pub struct SpawnArgs {
 
     /// Read this config file instead of the one in the config directory.
     ///
-    /// The repository's `.herdr-agent-tools/config.toml` is still merged over it.
+    /// The repository's own config is still merged over it.
     #[arg(long, value_name = "PATH")]
     config: Option<PathBuf>,
 
