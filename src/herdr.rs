@@ -187,12 +187,21 @@ impl HerdrError {
         }
     }
 
-    /// Whether herdr is saying a submission did not move the agent, rather than that it refused it.
+    /// Whether herdr is saying a submission may never have landed, rather than that it refused it.
+    ///
+    /// One code, because only one of herdr's means this. `agent_prompt_stalled` is herdr watching for
+    /// any state change in the five seconds after it submitted and seeing none — the prompt may have
+    /// been swallowed, so re-sending it risks nothing.
+    ///
+    /// `timeout` is deliberately not here, and putting it here is a duplicate-delivery bug. herdr
+    /// submits the prompt *before* it starts waiting, so `timeout` says the requested state never
+    /// arrived, never that the text failed to land. A caller that re-sends on it delivers the same
+    /// message twice.
     ///
     /// Lives here rather than beside the caller because these are herdr's codes, and this module is
     /// where herdr's vocabulary is read — the same reason [`exit_status`](Self::exit_status) is here.
     pub fn is_undelivered(&self) -> bool {
-        matches!(self.code(), Some("agent_prompt_stalled" | "timeout"))
+        matches!(self.code(), Some("agent_prompt_stalled"))
     }
 
     /// Whether herdr answered that the target does not exist.
@@ -410,24 +419,28 @@ mod tests {
     }
 
     #[test]
-    fn only_the_two_codes_that_mean_the_prompt_did_not_land_are_undelivered() {
-        // The re-send is for a submission herdr says did not move the agent — never for one it
+    fn only_the_code_that_means_the_prompt_may_never_have_landed_is_undelivered() {
+        // The re-send is for a submission herdr says it saw no effect from — never for one it
         // refused, which re-sending would only refuse again.
-        for code in ["agent_prompt_stalled", "timeout"] {
+        let stalled = HerdrError::Refused {
+            command: "agent prompt".to_owned(),
+            code: "agent_prompt_stalled".to_owned(),
+            message: "…".to_owned(),
+        };
+        assert!(stalled.is_undelivered());
+
+        // `timeout` is the one that must stay out, and it is a duplicate-delivery bug when it does
+        // not. herdr submits the prompt before it starts waiting, so a timeout says the requested
+        // state never arrived — never that the text failed to land. Re-sending on it sent every
+        // message to a busy agent twice.
+        for code in ["timeout", "agent_not_found", "agent_target_ambiguous"] {
             let error = HerdrError::Refused {
                 command: "agent prompt".to_owned(),
                 code: code.to_owned(),
                 message: "…".to_owned(),
             };
-            assert!(error.is_undelivered(), "{code}");
+            assert!(!error.is_undelivered(), "{code}");
         }
-
-        let refused = HerdrError::Refused {
-            command: "agent prompt".to_owned(),
-            code: "agent_not_found".to_owned(),
-            message: "…".to_owned(),
-        };
-        assert!(!refused.is_undelivered());
     }
 
     #[test]

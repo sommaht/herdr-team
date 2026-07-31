@@ -79,20 +79,34 @@ pub struct PromptArgs {
 }
 
 impl PromptArgs {
-    /// The delivery wait these flags build, or `None` under `--no-verify`.
+    /// The delivery wait these flags build, or `None` when no wait could prove anything.
     ///
     /// `--until working` is the load-bearing default: it returns as soon as delivery is proven,
     /// where herdr's bare `--wait` would wait for the whole turn to finish.
-    fn wait(&self) -> Option<Wait> {
+    ///
+    /// That default is dropped for a target that is **already** working, because herdr cannot match
+    /// it. A `--until` state counts only once the agent's state-change sequence has passed the
+    /// submission's, and that sequence advances only when the status actually changes — so an agent
+    /// working before and working after never satisfies it. Asking anyway spends the whole timeout
+    /// and then reports a prompt that did land as undelivered.
+    ///
+    /// An explicit `--wait-until` is honored whatever the current status, because the caller is
+    /// asking about a transition rather than about delivery: `--wait-until idle` against a working
+    /// agent is a request to wait out the turn, and that transition does happen.
+    fn wait(&self, current: &str) -> Option<Wait> {
         if self.no_verify {
             return None;
         }
-        let until = if self.wait_until.is_empty() {
-            vec![WORKING.to_owned()]
-        } else {
-            self.wait_until.clone()
-        };
-        Some(Wait { until, timeout: self.timeout })
+        if self.wait_until.is_empty() {
+            return (current != WORKING).then(|| Wait {
+                until: vec![WORKING.to_owned()],
+                timeout: self.timeout,
+            });
+        }
+        Some(Wait {
+            until: self.wait_until.clone(),
+            timeout: self.timeout,
+        })
     }
 
     /// Whether the composer guard runs.
@@ -134,11 +148,13 @@ impl Cmd for PromptArgs {
             }
         }
 
-        // The honest gap: an agent that was already `working` matches `--until working` instantly,
-        // which proves nothing. Reported as unverified rather than as a guarantee this did not earn.
-        let wait = self.wait();
-        let verified = wait.is_some() && before.status() != WORKING;
-        if wait.is_some() && !verified {
+        // The honest gap: an agent already working has no state change left to make, so nothing a
+        // wait could observe would prove this landed. Submitted anyway — herdr queues it, and the
+        // target picks it up when its turn ends — and reported as unverified rather than as a
+        // guarantee this did not earn.
+        let wait = self.wait(before.status());
+        let verified = wait.is_some();
+        if !verified && !self.no_verify {
             sink.warn(&format!(
                 "{} was already working, so delivery could not be verified",
                 self.target
@@ -159,10 +175,13 @@ impl Cmd for PromptArgs {
 /// Shared with `spawn`, whose first prompt goes through exactly this path. The sink comes last: it
 /// is the channel a warning is reported through, not the thing being acted on.
 ///
-/// On `agent_prompt_stalled` or `timeout` the prompt is re-sent once — finding 2 was that a prompt
-/// sent within a few seconds of starting an agent is silently swallowed, and waiting and re-sending
-/// worked in every observed case. A second failure is a retryable conflict rather than a silent
-/// success.
+/// On `agent_prompt_stalled` the prompt is re-sent once — finding 2 was that a prompt sent within a
+/// few seconds of starting an agent is silently swallowed, and waiting and re-sending worked in
+/// every observed case. A second failure is a retryable conflict rather than a silent success.
+///
+/// Only that one code, per [`HerdrError::is_undelivered`]: herdr submits before it waits, so any
+/// other wait failure describes a prompt that landed. Re-sending on `timeout` was delivering every
+/// such message twice.
 ///
 /// # Errors
 ///
@@ -291,9 +310,36 @@ mod tests {
     fn the_default_wait_proves_delivery_by_the_status_moving_to_working() {
         let args = parse(&["prompt", "reviewer", "ship it"]);
 
-        let wait = args.wait().expect("verification is on by default");
+        let wait = args.wait("idle").expect("verification is on by default");
         assert_eq!(wait.until, [WORKING]);
         assert_eq!(wait.timeout, 15_000);
+    }
+
+    /// The bug this shape exists to prevent.
+    ///
+    /// herdr matches a `--until` state only once the state-change sequence has passed the
+    /// submission's, and that sequence advances only on a real status change. An agent working
+    /// before and after never satisfies `--until working`, so asking spends the whole timeout and
+    /// then calls a delivered prompt undelivered.
+    #[test]
+    fn the_default_wait_is_dropped_for_a_target_that_is_already_working() {
+        let args = parse(&["prompt", "reviewer", "ship it"]);
+
+        assert!(args.wait(WORKING).is_none(), "no state change is left to observe");
+        assert!(args.wait("idle").is_some());
+        assert!(args.wait("blocked").is_some());
+        assert!(args.wait("done").is_some());
+    }
+
+    /// An explicit `--wait-until` is a question about a transition, not about delivery.
+    #[test]
+    fn an_explicit_wait_until_is_honored_even_against_a_working_target() {
+        // `--wait-until idle` against a working agent is a request to wait out the turn, and that
+        // transition really does happen — so dropping it here would break the settle wait.
+        let args = parse(&["prompt", "reviewer", "go", "--wait-until", "idle"]);
+
+        let wait = args.wait(WORKING).expect("the caller asked for a transition");
+        assert_eq!(wait.until, ["idle"]);
     }
 
     #[test]
@@ -308,7 +354,7 @@ mod tests {
             "blocked",
         ]);
 
-        let wait = args.wait().expect("still verifying, just for different states");
+        let wait = args.wait("idle").expect("still verifying, just for different states");
         assert_eq!(wait.until, ["idle", "blocked"]);
     }
 
@@ -316,8 +362,12 @@ mod tests {
     fn no_verify_skips_the_wait_and_force_does_not() {
         // The two flags are not interchangeable and neither implies the other: --force skips the
         // composer guard, --no-verify skips the delivery wait.
-        assert!(parse(&["prompt", "reviewer", "go", "--no-verify"]).wait().is_none());
-        assert!(parse(&["prompt", "reviewer", "go", "--force"]).wait().is_some());
+        assert!(
+            parse(&["prompt", "reviewer", "go", "--no-verify"])
+                .wait("idle")
+                .is_none()
+        );
+        assert!(parse(&["prompt", "reviewer", "go", "--force"]).wait("idle").is_some());
         assert!(!parse(&["prompt", "reviewer", "go", "--force"]).guarded());
         assert!(parse(&["prompt", "reviewer", "go", "--no-verify"]).guarded());
     }
@@ -359,7 +409,7 @@ mod tests {
         // --no-reply shapes the message; --no-verify skips the delivery wait; --force skips the
         // composer guard. No one of them implies another.
         let args = parse(&["prompt", "reviewer", "go", "--no-reply"]);
-        assert!(args.wait().is_some());
+        assert!(args.wait("idle").is_some());
         assert!(args.guarded());
     }
 
