@@ -76,6 +76,8 @@ struct HookPayload<'a> {
 pub struct Probe {
     /// herdr's `--source`: which of a pane's several renderings to take.
     pub source: &'static str,
+    /// herdr's `--format`: whether the rendering keeps its escape sequences.
+    pub format: &'static str,
     /// How many lines of it are enough.
     pub lines: u32,
 }
@@ -86,9 +88,24 @@ impl Default for Probe {
     ///
     /// Forty lines is more than any composer needs and costs nothing; only the bottom is used.
     fn default() -> Self {
-        Self { source: "detection", lines: 40 }
+        Self {
+            source: "detection",
+            format: "text",
+            lines: 40,
+        }
     }
 }
+
+/// The rendering that still carries its escape sequences, read only to tell a suggestion from a draft.
+///
+/// A second source rather than a second format of the first: `detection` is handed back with its
+/// escapes already stripped, whatever `--format` asks for, so the styling this needs exists only in
+/// the renderings herdr does not normalize.
+const STYLED: Probe = Probe {
+    source: "visible",
+    format: "ansi",
+    lines: 40,
+};
 
 /// A coding-agent CLI whose composer this tool can read.
 ///
@@ -217,11 +234,11 @@ impl Composer {
 /// Returns whatever `read` returned.
 pub fn readiness<E>(
     kind: Option<&str>,
-    read: impl FnOnce(&'static str, u32) -> Result<String, E>,
+    read: impl Fn(&'static str, &'static str, u32) -> Result<String, E>,
 ) -> Result<Composer, E> {
     let harness = kind.and_then(by_kind);
     let probe = harness.map_or_else(Probe::default, AgentHarness::probe);
-    let snapshot = read(probe.source, probe.lines)?;
+    let snapshot = read(probe.source, probe.format, probe.lines)?;
 
     let lines: Vec<&str> = snapshot.lines().collect();
     let Some(body) = prompt_box_body(&lines) else {
@@ -237,6 +254,10 @@ pub fn readiness<E>(
     });
 
     Ok(match occupied {
+        // Content in the box is not yet a draft: a harness draws its own suggestions there, and the
+        // plain rendering shows them exactly as it shows typed text. Confirmed against the styled
+        // rendering before refusing, which costs a second read on the refusal path alone.
+        Some(true) if suggestion_only(&read(STYLED.source, STYLED.format, probe.lines)?) => Composer::Empty,
         Some(true) => Composer::Occupied,
         Some(false) => Composer::Empty,
         // No harness recognized the box. Reported as an unknown marker rather than as `Empty`,
@@ -272,12 +293,142 @@ fn occupied_after(marker: char, body: &[&str]) -> Option<bool> {
     )
 }
 
+/// Whether the box holds content and every character of it is faint.
+///
+/// Faint — SGR 2 — is how a harness draws text it wrote for itself: a suggested next action offered
+/// to an operator who has been away. Stripped of styling it is indistinguishable from a draft, which
+/// is why the plain tier cannot decide this and why refusing on its answer alone rejected panes
+/// nobody had typed into.
+///
+/// Faintness rather than styling in general, because a draft can be styled too: a harness colours a
+/// skill name the operator typed. Colour is emphasis and faint is its opposite, so only faint can
+/// stand for text nobody wrote.
+///
+/// Answers `false` for a box it cannot find or one whose content is not wholly faint — the caller
+/// then refuses, so every uncertainty here keeps the guard rather than dropping it.
+fn suggestion_only(styled: &str) -> bool {
+    let read: Vec<StyledLine> = styled.lines().map(StyledLine::read).collect();
+    let plain: Vec<&str> = read.iter().map(|line| line.text.as_str()).collect();
+    let Some(body) = prompt_box_range(&plain) else {
+        return false;
+    };
+
+    let mut content = false;
+    for line in &read[body] {
+        for (character, faint) in line.text.chars().zip(&line.faint) {
+            // The marker is the box's own furniture rather than anyone's text, and it is drawn
+            // unfaint beside a suggestion — so counting it would answer `false` every time.
+            if character.is_whitespace() || HARNESSES.into_iter().any(|harness| harness.marker() == character) {
+                continue;
+            }
+            if !*faint {
+                return false;
+            }
+            content = true;
+        }
+    }
+    content
+}
+
+/// One line of a styled snapshot: its text, and whether each character of that text was faint.
+///
+/// The two are parallel by construction — a character is pushed to both or to neither — so a caller
+/// can ask about the box's content after locating it in the text alone.
+struct StyledLine {
+    /// The line with its escape sequences removed.
+    text: String,
+    /// Whether the character at the same position was drawn faint.
+    faint: Vec<bool>,
+}
+
+impl StyledLine {
+    /// Splits a line into its text and its faintness, following the SGR sequences that set it.
+    ///
+    /// Only the attribute this asks about is tracked. A colour is read and discarded rather than
+    /// ignored, because it is `0` and `22` — the resets — that end a faint run, and a parser that
+    /// skipped sequences it did not care about would miss them.
+    fn read(line: &str) -> Self {
+        let mut text = String::new();
+        let mut faint = Vec::new();
+        let mut drawn_faint = false;
+        let mut characters = line.chars().peekable();
+
+        while let Some(character) = characters.next() {
+            if character != '\u{1b}' {
+                text.push(character);
+                faint.push(drawn_faint);
+                continue;
+            }
+            // `ESC [ <parameters> <final byte>`. Anything else is not a sequence this reads, and
+            // dropping the escape alone leaves the rest as the text it already is.
+            if characters.peek() != Some(&'[') {
+                continue;
+            }
+            characters.next();
+            let mut parameters = String::new();
+            for character in characters.by_ref() {
+                if character.is_ascii_alphabetic() {
+                    if character == 'm' {
+                        drawn_faint = faintness_after(drawn_faint, &parameters);
+                    }
+                    break;
+                }
+                parameters.push(character);
+            }
+        }
+
+        Self { text, faint }
+    }
+}
+
+/// Whether text is faint after an SGR sequence carrying `parameters`, given that it was before.
+///
+/// An empty parameter list is `0`, which is what `ESC[m` means and what a harness emits before it
+/// sets the colour it actually wanted.
+///
+/// A colour's own arguments are consumed rather than scanned, because `38;2;<r>;<g>;<b>` selects
+/// twenty-four-bit foreground and that `2` is the colour space — reading it as the faint attribute
+/// called every coloured draft a suggestion, which is the one mistake this whole check exists to
+/// avoid.
+fn faintness_after(current: bool, parameters: &str) -> bool {
+    let mut faint = current;
+    let mut values = parameters.split(';');
+
+    while let Some(parameter) = values.next() {
+        match parameter {
+            "" | "0" | "22" => faint = false,
+            "2" => faint = true,
+            "38" | "48" | "58" => match values.next() {
+                // `5;<n>` is one indexed colour; `2;<r>;<g>;<b>` is three channels.
+                Some("5") => drop(values.next()),
+                Some("2") => {
+                    values.next();
+                    values.next();
+                    values.next();
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+
+    faint
+}
+
 /// The lines between the last two horizontal rules, which is where every harness renders its
 /// composer.
 ///
 /// Harness-agnostic by construction, and the same region herdr's own agent detection extracts as
 /// `prompt_box_body`.
 fn prompt_box_body<'a>(lines: &'a [&'a str]) -> Option<&'a [&'a str]> {
+    Some(&lines[prompt_box_range(lines)?])
+}
+
+/// Where that body sits, for a caller holding something else indexed the same way.
+///
+/// [`suggestion_only`] locates the box in the text and then asks about the styling beside it, which
+/// needs the positions rather than the lines.
+fn prompt_box_range(lines: &[&str]) -> Option<std::ops::Range<usize>> {
     let mut rules = lines
         .iter()
         .enumerate()
@@ -286,7 +437,7 @@ fn prompt_box_body<'a>(lines: &'a [&'a str]) -> Option<&'a [&'a str]> {
         .map(|(index, _)| index);
     let bottom = rules.next()?;
     let top = rules.next()?;
-    Some(&lines[top + 1..bottom])
+    Some(top + 1..bottom)
 }
 
 /// Whether a line is one of the box's borders.
@@ -372,10 +523,61 @@ mod tests {
     /// The whole reason the read is a closure: this module never performs I/O, so a test hands it a
     /// literal and the read cannot fail.
     fn against(kind: Option<&str>, snapshot: &'static str) -> Composer {
-        readiness(kind, |_source, _lines| {
+        readiness(kind, |_source, _format, _lines| {
             Ok::<_, std::convert::Infallible>(snapshot.to_owned())
         })
         .expect("reading a fixture is infallible")
+    }
+
+    /// `readiness` against a *styled* fixture, standing in for both renderings herdr offers.
+    ///
+    /// The plain tier is served the same snapshot with its escapes removed, which is what herdr's
+    /// own `detection` source hands back — the whole reason the guard could not see the difference.
+    fn against_styled(kind: Option<&str>, styled: &'static str) -> Composer {
+        readiness(kind, |_source, format, _lines| {
+            Ok::<_, std::convert::Infallible>(if format == STYLED.format {
+                styled.to_owned()
+            } else {
+                styled
+                    .lines()
+                    .map(|line| StyledLine::read(line).text)
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+        })
+        .expect("reading a fixture is infallible")
+    }
+
+    /// A suggestion the harness drew for itself is not someone's unsent message.
+    ///
+    /// The reported failure: a composer left idle long enough acquires a suggested next action,
+    /// which the plain snapshot renders indistinguishably from a draft — so `prompt` refused a pane
+    /// whose composer its operator had never touched.
+    #[test]
+    fn a_faint_suggestion_in_the_box_is_not_a_draft() {
+        assert_eq!(
+            against_styled(
+                Some("claude"),
+                include_str!("../fixtures/composer/claude-suggestion.txt")
+            ),
+            Composer::Empty
+        );
+    }
+
+    /// The discriminator is faintness, not styling at all.
+    ///
+    /// A draft naming a skill is *coloured*, which an earlier reading of this bug mistook for the
+    /// mark of a suggestion. Colour means emphasis and faint means the opposite, so only faint can
+    /// stand for text nobody typed.
+    #[test]
+    fn a_coloured_draft_is_still_a_draft() {
+        assert_eq!(
+            against_styled(
+                Some("claude"),
+                include_str!("../fixtures/composer/claude-highlighted-draft.txt")
+            ),
+            Composer::Occupied
+        );
     }
 
     #[test]
@@ -388,19 +590,24 @@ mod tests {
     /// The caller reads what the resolved harness asked for, and nothing else chooses it.
     #[test]
     fn the_read_is_the_one_the_resolved_harness_asked_for() {
-        let mut asked = None;
-        let _ = readiness(Some("claude"), |source, lines| {
-            asked = Some((source, lines));
+        // A `Cell` because the read is now called more than once on some paths, so the closure has
+        // to be `Fn` rather than `FnOnce`.
+        let asked = std::cell::Cell::new(None);
+        let _ = readiness(Some("claude"), |source, format, lines| {
+            asked.set(Some((source, format, lines)));
             Ok::<_, std::convert::Infallible>(String::new())
         });
 
-        assert_eq!(asked, Some((Probe::default().source, Probe::default().lines)));
+        assert_eq!(
+            asked.get(),
+            Some((Probe::default().source, Probe::default().format, Probe::default().lines))
+        );
     }
 
     /// A read failure is the caller's, returned untouched rather than folded into an answer.
     #[test]
     fn a_failed_read_is_not_reported_as_a_composer_answer() {
-        let answer = readiness(Some("claude"), |_source, _lines| Err("the pane went away"));
+        let answer = readiness(Some("claude"), |_source, _format, _lines| Err("the pane went away"));
         assert_eq!(answer, Err("the pane went away"));
     }
 
