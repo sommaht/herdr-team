@@ -1,4 +1,4 @@
-//! `herdr-team` — launch and prompt herdr agents from one command.
+//! `herdr-team` — launch and message herdr agents from one command.
 //!
 //! Parses and dispatches; no command logic lives here. There is no `cli` module: even at five
 //! commands the dispatch match is a handful of lines, and a file holding only module declarations
@@ -19,7 +19,7 @@ use clap::error::{ContextKind, ContextValue, ErrorKind};
 use clap::{CommandFactory, Parser, Subcommand};
 use thiserror::Error;
 
-use crate::cmd::{AgentsArgs, AsExitStatus, Cmd, ExitStatus, Failure, KillArgs, PrimeArgs, PromptArgs, SpawnArgs};
+use crate::cmd::{AgentsArgs, AsExitStatus, Cmd, ExitStatus, Failure, KillArgs, MsgArgs, PrimeArgs, SpawnArgs};
 use crate::core::{OutputMode, Sink};
 
 // =====================================================================================================================
@@ -30,13 +30,13 @@ use crate::core::{OutputMode, Sink};
 #[command(
     name = "herdr-team",
     version,
-    about = "Launch and prompt herdr agents from one command",
-    long_about = "Launch and prompt herdr agents from one command.\n\
+    about = "Launch and message herdr agents from one command",
+    long_about = "Launch and message herdr agents from one command.\n\
         \n\
         herdr starts an agent only in a pane that already exists and is sitting at an interactive \
         shell prompt, so launching one by hand is two steps. `spawn` does both: it creates a pane, \
         tab, or workspace, reads back the new pane's id, and starts a configured agent in it. \
-        `prompt` delivers text to an agent that already exists, `kill` closes an agent's pane \
+        `msg` delivers text to an agent that already exists, `kill` closes an agent's pane \
         unless it is mid-task, and `agents` lists what the config holds.\n\
         \n\
         Run `herdr-team <command> --help` for details and examples.",
@@ -65,7 +65,12 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Command {
     Spawn(SpawnArgs),
-    Prompt(PromptArgs),
+    // Not a doc comment, for the reason stated above: on this enum a doc comment *is* the
+    // subcommand's help, and this command's help belongs to `MsgArgs`. `msg` was called `prompt`
+    // until this build and still answers to it — hidden rather than visible, because the help should
+    // teach one name. An alias is a courtesy to whoever learned the other, not a second way in.
+    #[command(alias = "prompt")]
+    Msg(MsgArgs),
     Kill(KillArgs),
     Agents(AgentsArgs),
     Prime(PrimeArgs),
@@ -85,7 +90,7 @@ fn main() -> ExitCode {
 
             match cli.command {
                 Command::Spawn(args) => run(args, &sink),
-                Command::Prompt(args) => run(args, &sink),
+                Command::Msg(args) => run(args, &sink),
                 Command::Kill(args) => run(args, &sink),
                 Command::Agents(args) => run(args, &sink),
                 Command::Prime(args) => run(args, &sink),
@@ -143,7 +148,7 @@ impl AsExitStatus for ArgumentError {
 /// Letting clap print for itself breaks both contracts this binary advertises. A `--json` caller
 /// gets multi-line prose on stderr and nothing at all on stdout — failing to parse on exactly the
 /// errors it most needs to classify — and the prose repeats the offending value back, which for
-/// `prompt` and `spawn --prompt` is the prompt text.
+/// `msg` and `spawn --msg` is the prompt text.
 ///
 /// So the rejection is rebuilt from clap's structured context, and the rebuild is an allowlist:
 /// every word in the result is either a constant in [`describe`] or a name this build declares. See
@@ -289,28 +294,32 @@ fn with_values(detail: &str, values: &[String]) -> String {
 ///
 /// Matched against the declared names rather than taken positionally, so the word that reaches the
 /// message is this build's and not the caller's.
+///
+/// Aliases match too, and answer with the canonical name. A caller still spelling `msg` the way it
+/// was spelled before this build is one the message can teach — pointing at `msg --help` says both
+/// where to look and what the command is called now, where echoing the alias back would say neither.
 fn subcommand_named(arguments: &[String]) -> Option<String> {
     let root = Cli::command();
     arguments.iter().skip(1).find_map(|argument| {
         root.get_subcommands()
-            .map(clap::Command::get_name)
-            .find(|name| *name == argument)
-            .map(ToOwned::to_owned)
+            .find(|command| command.get_name() == argument || command.get_all_aliases().any(|alias| alias == argument))
+            .map(|command| command.get_name().to_owned())
     })
 }
 
 /// Whether argv asked for `--json`, read without a parse.
 ///
 /// The failure path has no parsed [`Cli`] to read the flag off, and a `--json` caller that meets
-/// prose there is the case the contract most has to survive. Two tokens are stepped over: a bare
-/// `--`, past which everything belongs to the agent, and the value after `--prompt`, which is
-/// arbitrary text and may spell this flag.
+/// prose there is the case the contract most has to survive. Two kinds of token are stepped over: a
+/// bare `--`, past which everything belongs to the agent, and the value after `spawn`'s message
+/// flag, which is arbitrary text and may spell this flag. Both of that flag's spellings are listed,
+/// since the retired one still parses.
 fn json_requested(arguments: Vec<String>) -> bool {
     let mut arguments = arguments.into_iter();
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
             "--json" => return true,
-            "--prompt" => {
+            "--msg" | "--prompt" => {
                 arguments.next();
             }
             "--" => return false,
@@ -360,7 +369,9 @@ mod tests {
         for words in [
             argv(&["herdr-team", "prompt", "reviewer", secret, "extra"]),
             argv(&["herdr-team", "prompt", secret]),
-            argv(&["herdr-team", "spawn", "reviewer", "--prompt"]),
+            argv(&["herdr-team", "spawn", "reviewer", "--msg"]),
+            argv(&["herdr-team", "spawn", "reviewer", "--msg", secret, "extra"]),
+            // The retired spelling reaches the same argument, so it is the same leak if it leaks.
             argv(&["herdr-team", "spawn", "reviewer", "--prompt", secret, "extra"]),
             argv(&["herdr-team", "prompt", "reviewer", "--wait-until", secret]),
         ] {
@@ -389,9 +400,63 @@ mod tests {
     #[test]
     fn a_missing_argument_names_the_argument_and_the_help_that_describes_it() {
         assert_eq!(
-            rejection(&["herdr-team", "prompt", "reviewer"]),
-            "missing a required argument <TEXT>; run `herdr-team prompt --help`"
+            rejection(&["herdr-team", "msg", "reviewer"]),
+            "missing a required argument <TEXT>; run `herdr-team msg --help`"
         );
+    }
+
+    /// Every command's summary comes from its own `*Args`, not from a note left on the variant.
+    ///
+    /// Written after a doc comment on the `Msg` variant became that command's entire `--help`
+    /// summary — four sentences about an alias, in the list a reader scans to find the command they
+    /// want. clap takes a variant's doc comment as the subcommand's `about` and says nothing about
+    /// it, and `cargo test` cannot see help text, so the leak reached an installed binary. A length
+    /// bound is the cheap shape of "this is a summary": the real ones run to sixty-odd characters.
+    #[test]
+    fn every_commands_summary_is_the_one_line_its_own_args_declares() {
+        let mut root = Cli::command();
+        root.build();
+
+        for command in root.get_subcommands() {
+            let about = command
+                .get_about()
+                .unwrap_or_else(|| panic!("{} has no summary at all", command.get_name()))
+                .to_string();
+
+            assert!(
+                about.lines().count() == 1 && about.len() <= 100,
+                "{}'s summary is not a summary: {about}",
+                command.get_name()
+            );
+        }
+    }
+
+    /// The retired spelling still parses, and still reaches the command it was renamed to.
+    #[test]
+    fn the_command_that_was_renamed_still_answers_to_what_it_was_called() {
+        let parsed = Cli::try_parse_from(["herdr-team", "prompt", "reviewer", "go"]).expect("the alias parses");
+
+        assert!(matches!(parsed.command, Command::Msg(_)));
+    }
+
+    /// A rejection under the old spelling points at the new one, which is where the flags are.
+    #[test]
+    fn a_rejection_under_the_old_spelling_names_the_command_it_is_now() {
+        let rendered = rejection(&["herdr-team", "prompt", "reviewer"]);
+
+        assert!(rendered.contains("herdr-team msg --help"), "{rendered}");
+        assert!(!rendered.contains("prompt"), "{rendered}");
+    }
+
+    /// The flag was renamed alongside its command, and both spellings still deliver.
+    #[test]
+    fn the_first_message_flag_answers_to_both_of_its_spellings() {
+        for flag in ["--msg", "--prompt"] {
+            assert!(
+                Cli::try_parse_from(["herdr-team", "spawn", "worker", flag, "go"]).is_ok(),
+                "{flag}"
+            );
+        }
     }
 
     #[test]
@@ -442,14 +507,14 @@ mod tests {
     /// Neither of the two places `--json` may appear as data is read as the flag.
     #[test]
     fn a_json_that_is_data_rather_than_a_flag_does_not_switch_the_mode() {
-        // A prompt may spell anything, and everything past `--` is the agent's.
-        assert!(!json_requested(argv(&[
-            "herdr-team",
-            "spawn",
-            "worker",
-            "--prompt",
-            "--json"
-        ])));
+        // A prompt may spell anything, and everything past `--` is the agent's. Both spellings of
+        // the message flag are stepped over, since both still carry that arbitrary text.
+        for flag in ["--msg", "--prompt"] {
+            assert!(
+                !json_requested(argv(&["herdr-team", "spawn", "worker", flag, "--json"])),
+                "{flag}"
+            );
+        }
         assert!(!json_requested(argv(&[
             "herdr-team",
             "spawn",

@@ -11,7 +11,7 @@ prompt text on stdin.
 | Command | Purpose |
 | ------- | ------- |
 | `spawn` | Create a pane, tab, or workspace and start a configured agent in it |
-| `prompt` | Deliver a prompt to an agent that already exists |
+| `msg` | Deliver a message to an agent that already exists |
 | `kill` | Close an agent's pane, refusing one that is mid-task |
 | `agents` | List what the config holds |
 | `prime` | Print an agent-facing brief on driving this CLI |
@@ -22,16 +22,19 @@ rather than a flag change. It makes no herdr call and a config it cannot read co
 and nothing else, because a hook that fails is worse than one that says little.
 
 ```
-herdr-team spawn reviewer --placement tab --agent opus --prompt "Review the branch"
-git diff | herdr-team prompt reviewer -
+herdr-team spawn reviewer --placement tab --agent opus --msg "Review the branch"
+git diff | herdr-team msg reviewer -
 herdr-team kill reviewer
 herdr-team agents
 ```
 
-`prompt` and `kill` each refuse one thing by default, and `--force` is the override for both: a
+`msg` and `kill` each refuse one thing by default, and `--force` is the override for both: a
 composer holding someone's unsent text, and an agent still working or blocked. Neither refusal
 changes anything, and both exit 5. Neither clears on a timer either — a composer is cleared by the
 person typing into it — so the retry belongs after the named state changes, not on a loop.
+
+The command was called `prompt` until it started wrapping what it sends, and `msg` still answers to
+that name. So does `spawn --prompt`, now `--msg`.
 
 ## Agents
 
@@ -77,9 +80,10 @@ base = 'opus'
 prompt_file = 'review.md'
 ```
 
-`spawn reviewer --prompt "start with auth"` then delivers the file's contents, a blank line, and
-the prompt, as one message. With no `--prompt` the file is delivered alone. A file that is missing
-or blank is a refusal, raised before anything is created.
+`spawn reviewer --msg "start with auth"` then delivers the file's contents, a blank line, and the
+message, in one submission — an agent handed two would answer the first before it heard the second.
+With no `--msg` the file is delivered alone. A file that is missing or blank is a refusal, raised
+before anything is created.
 
 ## The repository layer
 

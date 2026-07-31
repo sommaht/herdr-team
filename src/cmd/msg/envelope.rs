@@ -161,7 +161,7 @@ impl Envelope {
             // `$HOME` and backticked code before the reply is ever sent.
             text.push_str(&format!(
                 "\n<how-to-reply>\n\
-                 {TOOL} prompt {address} --no-reply - <<'EOF'\n\
+                 {TOOL} msg {address} --no-reply - <<'EOF'\n\
                  {{{{your reply}}}}\n\
                  EOF\n\
                  </how-to-reply>"
@@ -264,7 +264,7 @@ mod tests {
              audit the CLI surface\n\
              </mail>\n\
              <how-to-reply>\n\
-             herdr-team prompt w4:p3 --no-reply - <<'EOF'\n\
+             herdr-team msg w4:p3 --no-reply - <<'EOF'\n\
              {{your reply}}\n\
              EOF\n\
              </how-to-reply>"

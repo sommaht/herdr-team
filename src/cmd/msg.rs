@@ -1,4 +1,9 @@
-//! `prompt` — deliver a prompt to an agent that already exists.
+//! `msg` — deliver a message to an agent that already exists.
+//!
+//! Called `prompt` until this build, and renamed because what lands is no longer a prompt: it is a
+//! prompt inside an envelope naming its sender and how to answer. The old spelling stays as a hidden
+//! alias. Everything below still says *prompt* for the text itself, which is what herdr's own
+//! `agent prompt` takes and what the redaction rule is written about.
 
 pub(super) mod envelope;
 
@@ -54,28 +59,30 @@ const DELIVERY_POLL_MS: u64 = 3_000;
 const DELIVERY_INTERVAL_MS: u64 = 250;
 
 // =====================================================================================================================
-// Prompt Args
+// Msg Args
 // =====================================================================================================================
 
-/// Deliver a prompt to an agent that already exists.
+/// Deliver a message to an agent that already exists.
 ///
 /// The target is a herdr pane id or a unique agent name; herdr resolves it server-side and answers
 /// `agent_not_found` or `agent_target_ambiguous` itself.
 #[derive(Debug, Args)]
 #[command(after_help = "Examples:\n  \
-    herdr-team prompt reviewer \"run the test suite and report failures\"\n  \
-    git diff | herdr-team prompt reviewer -\n  \
-    herdr-team prompt dispatcher --no-reply \"done: 4 flags are undocumented\"\n  \
-    herdr-team prompt w4:p17 \"go\" --wait-until idle --timeout 120000")]
-pub struct PromptArgs {
-    /// The agent to prompt: a herdr pane id, or a unique agent name.
+    herdr-team msg reviewer \"run the test suite and report failures\"\n  \
+    git diff | herdr-team msg reviewer -\n  \
+    herdr-team msg dispatcher --no-reply \"done: 4 flags are undocumented\"\n  \
+    herdr-team msg w4:p17 \"go\" --wait-until idle --timeout 120000\n\
+    \n\
+    Called `prompt` until this build; that spelling still works.")]
+pub struct MsgArgs {
+    /// The agent to message: a herdr pane id, or a unique agent name.
     target: String,
 
     /// The prompt text; `-` reads it from stdin (e.g. a heredoc or a pipe).
     // `allow_hyphen_values` is not in the doc comment because a caller has nothing to do about it.
     // Without it a prompt that opens with `--` is tokenized as a flag, and clap's rejection repeats
     // the would-be prompt back — which the prompt-redaction rule forbids outright. `--` is a repair
-    // only here; `spawn --prompt` has no separator to spare, so the fix has to be the same one on
+    // only here; `spawn --msg` has no separator to spare, so the fix has to be the same one on
     // both inputs.
     #[arg(allow_hyphen_values = true)]
     text: MaybeStdin<NonEmptyText>,
@@ -105,7 +112,7 @@ pub struct PromptArgs {
     force: bool,
 }
 
-impl PromptArgs {
+impl MsgArgs {
     /// How this submission's delivery will be proven, given what the target is doing now.
     ///
     /// An explicit `--wait-until` is honored whatever the current status, because the caller is
@@ -135,9 +142,9 @@ impl PromptArgs {
     }
 }
 
-impl Cmd for PromptArgs {
+impl Cmd for MsgArgs {
     type Ok = Delivered;
-    type Err = PromptError;
+    type Err = MsgError;
 
     /// One `agent get`, then the guard, then the submission.
     ///
@@ -152,7 +159,7 @@ impl Cmd for PromptArgs {
             })?;
             match readiness {
                 Composer::Occupied => {
-                    return Err(PromptError::ComposerOccupied { target: self.target });
+                    return Err(MsgError::ComposerOccupied { target: self.target });
                 }
                 // Failing open: delivered without the guarantee, and said so.
                 answer => {
@@ -312,7 +319,7 @@ fn delivery_window(message_lines: usize) -> u32 {
 ///
 /// # Errors
 ///
-/// [`PromptError::Herdr`] for anything herdr refused outright, and [`PromptError::Stalled`] when
+/// [`MsgError::Herdr`] for anything herdr refused outright, and [`MsgError::Stalled`] when
 /// two submissions both failed to move the agent.
 pub(super) fn deliver(
     target: &str,
@@ -320,7 +327,7 @@ pub(super) fn deliver(
     reply: &Reply,
     proof: &Proof,
     sink: &Sink,
-) -> Result<Submission, PromptError> {
+) -> Result<Submission, MsgError> {
     // Resolved and rendered once, before the re-send: a second submission must deliver the same
     // bytes as the first, and re-resolving would make a second `agent get` call to say so — and mint
     // a second id, leaving the pane check hunting for a token no delivered copy carries.
@@ -334,13 +341,13 @@ pub(super) fn deliver(
             sink.warn(&format!("{target} did not acknowledge the prompt; re-sending once"));
             agent::prompt(target, &text, wait).map_err(|error| {
                 if error.is_undelivered() {
-                    PromptError::Stalled { target: target.to_owned() }
+                    MsgError::Stalled { target: target.to_owned() }
                 } else {
-                    PromptError::Herdr(error)
+                    MsgError::Herdr(error)
                 }
             })?
         }
-        Err(error) => return Err(PromptError::Herdr(error)),
+        Err(error) => return Err(MsgError::Herdr(error)),
     };
 
     // A returned wait is a matched wait: herdr answers the states it was given or it errors, so
@@ -360,7 +367,7 @@ pub(super) fn deliver(
 // Output
 // =====================================================================================================================
 
-/// What `prompt` produced: whether delivery was proven, and herdr's record of the agent.
+/// What `msg` produced: whether delivery was proven, and herdr's record of the agent.
 #[derive(Debug, Serialize)]
 pub struct Delivered {
     /// Whether the wait actually proved delivery.
@@ -376,7 +383,7 @@ pub struct Delivered {
 
 impl Display for Delivered {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "prompted {} ({})", self.agent.pane(), self.agent.status())
+        write!(f, "messaged {} ({})", self.agent.pane(), self.agent.status())
     }
 }
 
@@ -384,9 +391,9 @@ impl Display for Delivered {
 // Errors
 // =====================================================================================================================
 
-/// Failure of the prompt flow.
+/// Failure of the delivery flow.
 #[derive(Debug, Error)]
-pub enum PromptError {
+pub enum MsgError {
     /// herdr refused something; its message and code are carried verbatim.
     #[error(transparent)]
     Herdr(#[from] HerdrError),
@@ -407,7 +414,7 @@ pub enum PromptError {
     },
 }
 
-impl AsExitStatus for PromptError {
+impl AsExitStatus for MsgError {
     fn exit_status(&self) -> ExitStatus {
         match self {
             Self::Herdr(error) => error.exit_status(),
@@ -437,10 +444,10 @@ mod tests {
     #[derive(Parser)]
     struct Harness {
         #[command(flatten)]
-        args: PromptArgs,
+        args: MsgArgs,
     }
 
-    fn parse(argv: &[&str]) -> PromptArgs {
+    fn parse(argv: &[&str]) -> MsgArgs {
         Harness::try_parse_from(argv).expect("parses").args
     }
 
@@ -458,7 +465,7 @@ mod tests {
 
     #[test]
     fn the_default_proof_is_a_wait_for_the_status_moving_to_working() {
-        let args = parse(&["prompt", "reviewer", "ship it"]);
+        let args = parse(&["msg", "reviewer", "ship it"]);
 
         let proof = args.proof("idle");
         assert_eq!(waited(&proof).until, [WORKING]);
@@ -473,7 +480,7 @@ mod tests {
     /// then calls a delivered prompt undelivered.
     #[test]
     fn a_target_that_is_already_working_is_proven_by_its_pane_rather_than_by_a_wait() {
-        let args = parse(&["prompt", "reviewer", "ship it"]);
+        let args = parse(&["msg", "reviewer", "ship it"]);
 
         assert_eq!(args.proof(WORKING), Proof::Pane, "no state change is left to observe");
         for settled in ["idle", "blocked", "done"] {
@@ -506,7 +513,7 @@ mod tests {
     fn an_explicit_wait_until_is_honored_even_against_a_working_target() {
         // `--wait-until idle` against a working agent is a request to wait out the turn, and that
         // transition really does happen — so dropping it here would break the settle wait.
-        let args = parse(&["prompt", "reviewer", "go", "--wait-until", "idle"]);
+        let args = parse(&["msg", "reviewer", "go", "--wait-until", "idle"]);
 
         let proof = args.proof(WORKING);
         assert_eq!(waited(&proof).until, ["idle"]);
@@ -515,7 +522,7 @@ mod tests {
     #[test]
     fn wait_until_replaces_the_states_for_a_caller_that_wants_the_full_settle_wait() {
         let args = parse(&[
-            "prompt",
+            "msg",
             "reviewer",
             "go",
             "--wait-until",
@@ -533,36 +540,33 @@ mod tests {
         // The two flags are not interchangeable and neither implies the other: --force skips the
         // composer guard, --no-verify skips the delivery wait.
         assert_eq!(
-            parse(&["prompt", "reviewer", "go", "--no-verify"]).proof("idle"),
+            parse(&["msg", "reviewer", "go", "--no-verify"]).proof("idle"),
             Proof::None
         );
         assert!(matches!(
-            parse(&["prompt", "reviewer", "go", "--force"]).proof("idle"),
+            parse(&["msg", "reviewer", "go", "--force"]).proof("idle"),
             Proof::Wait(_)
         ));
-        assert!(!parse(&["prompt", "reviewer", "go", "--force"]).guarded());
-        assert!(parse(&["prompt", "reviewer", "go", "--no-verify"]).guarded());
+        assert!(!parse(&["msg", "reviewer", "go", "--force"]).guarded());
+        assert!(parse(&["msg", "reviewer", "go", "--no-verify"]).guarded());
     }
 
     #[test]
     fn a_prompt_addresses_its_reply_at_the_sender_by_default() {
-        assert_eq!(parse(&["prompt", "reviewer", "go"]).reply(), Reply::ToSender);
+        assert_eq!(parse(&["msg", "reviewer", "go"]).reply(), Reply::ToSender);
     }
 
     #[test]
     fn no_reply_produces_a_message_that_closes_the_loop() {
         // The tail hands the replier this flag, so termination needs no memory: the replier runs the
         // line it was given rather than recalling a convention.
-        assert_eq!(
-            parse(&["prompt", "reviewer", "done", "--no-reply"]).reply(),
-            Reply::None
-        );
+        assert_eq!(parse(&["msg", "reviewer", "done", "--no-reply"]).reply(), Reply::None);
     }
 
     #[test]
     fn reply_to_addresses_a_collector_rather_than_the_sender() {
         assert_eq!(
-            parse(&["prompt", "worker", "go", "--reply-to", "collector"]).reply(),
+            parse(&["msg", "worker", "go", "--reply-to", "collector"]).reply(),
             Reply::To("collector".to_owned())
         );
     }
@@ -571,24 +575,22 @@ mod tests {
     fn no_reply_and_reply_to_are_refused_together_rather_than_one_silently_winning() {
         // One names an address the other deletes, so passing both is a caller that has not decided.
         // clap answers this with its own usage code, which is the 2 this crate's contract already uses.
-        assert!(
-            Harness::try_parse_from(["prompt", "reviewer", "go", "--no-reply", "--reply-to", "collector"]).is_err()
-        );
+        assert!(Harness::try_parse_from(["msg", "reviewer", "go", "--no-reply", "--reply-to", "collector"]).is_err());
     }
 
     #[test]
     fn the_reply_flags_are_independent_of_the_delivery_flags() {
         // --no-reply shapes the message; --no-verify skips the delivery wait; --force skips the
         // composer guard. No one of them implies another.
-        let args = parse(&["prompt", "reviewer", "go", "--no-reply"]);
+        let args = parse(&["msg", "reviewer", "go", "--no-reply"]);
         assert!(matches!(args.proof("idle"), Proof::Wait(_)));
         assert!(args.guarded());
     }
 
     #[test]
     fn the_guard_runs_unless_force_says_otherwise() {
-        assert!(parse(&["prompt", "reviewer", "go"]).guarded());
-        assert!(!parse(&["prompt", "reviewer", "go", "--force"]).guarded());
+        assert!(parse(&["msg", "reviewer", "go"]).guarded());
+        assert!(!parse(&["msg", "reviewer", "go", "--force"]).guarded());
     }
 
     /// A prompt that opens with a dash is delivered rather than rejected.
@@ -598,25 +600,22 @@ mod tests {
     #[test]
     fn a_prompt_that_opens_with_a_dash_is_prompt_text_rather_than_a_flag() {
         for text in ["--force the issue", "-e", "--not-a-flag-here", "-- leading separator"] {
-            assert_eq!(parse(&["prompt", "reviewer", text]).text.to_string(), text, "{text}");
+            assert_eq!(parse(&["msg", "reviewer", text]).text.to_string(), text, "{text}");
         }
 
         // The two limits, both of them clap's and neither of them a leak. A token that *exactly*
         // matches a declared flag is still that flag, and a bare `--` is still the value terminator.
         // Both are repaired the same way, and the repair is what `--` is for: everything after it is
         // the prompt.
-        assert_eq!(
-            parse(&["prompt", "reviewer", "--", "--force"]).text.to_string(),
-            "--force"
-        );
-        assert_eq!(parse(&["prompt", "reviewer", "--", "--"]).text.to_string(), "--");
+        assert_eq!(parse(&["msg", "reviewer", "--", "--force"]).text.to_string(), "--force");
+        assert_eq!(parse(&["msg", "reviewer", "--", "--"]).text.to_string(), "--");
     }
 
     #[test]
     fn a_flag_after_the_prompt_is_still_a_flag() {
         // The other half of `allow_hyphen_values`: it must claim the prompt's own value and nothing
         // past it, or every flag on this command stops working.
-        let args = parse(&["prompt", "reviewer", "--go", "--wait-until", "idle", "--force"]);
+        let args = parse(&["msg", "reviewer", "--go", "--wait-until", "idle", "--force"]);
 
         assert_eq!(args.text.to_string(), "--go");
         assert_eq!(args.wait_until, ["idle"]);
@@ -625,7 +624,7 @@ mod tests {
 
     #[test]
     fn a_blank_prompt_is_refused_at_parse_time() {
-        assert!(Harness::try_parse_from(["prompt", "reviewer", "   "]).is_err());
+        assert!(Harness::try_parse_from(["msg", "reviewer", "   "]).is_err());
     }
 
     /// The window is sized to the message, which is what scrolled the transcript in the first place.
@@ -704,7 +703,7 @@ mod tests {
             agent: record(),
         };
 
-        assert_eq!(delivered.to_string(), "prompted w4:p17 (working)");
+        assert_eq!(delivered.to_string(), "messaged w4:p17 (working)");
         assert_eq!(
             serde_json::to_string(&delivered).unwrap(),
             r#"{"delivered":true,"agent":{"agent":"claude","agent_status":"working","pane_id":"w4:p17"}}"#
@@ -723,14 +722,14 @@ mod tests {
 
     #[test]
     fn a_refusal_and_a_stall_are_both_retryable_conflicts() {
-        let occupied = PromptError::ComposerOccupied { target: "reviewer".to_owned() };
+        let occupied = MsgError::ComposerOccupied { target: "reviewer".to_owned() };
         assert_eq!(occupied.exit_status(), ExitStatus::Conflict);
         assert_eq!(
             occupied.to_string(),
             "reviewer's composer holds unsent text; wait for it to clear, or pass --force to send anyway"
         );
 
-        let stalled = PromptError::Stalled { target: "reviewer".to_owned() };
+        let stalled = MsgError::Stalled { target: "reviewer".to_owned() };
         assert_eq!(stalled.exit_status(), ExitStatus::Conflict);
     }
 
@@ -739,14 +738,14 @@ mod tests {
         // What the guard read is someone's half-written message. The refusal says the composer holds
         // unsent text and never says what that text is — there is no field on this variant that
         // could carry it.
-        let occupied = PromptError::ComposerOccupied { target: "reviewer".to_owned() };
+        let occupied = MsgError::ComposerOccupied { target: "reviewer".to_owned() };
 
         assert!(!occupied.to_string().contains("wait, before you commit"));
     }
 
     #[test]
     fn a_herdr_failure_forwards_herdrs_own_status_and_provenance() {
-        let error = PromptError::Herdr(crate::herdr::HerdrError::Refused {
+        let error = MsgError::Herdr(crate::herdr::HerdrError::Refused {
             command: "agent get".to_owned(),
             code: "agent_not_found".to_owned(),
             message: "agent target reviewer not found".to_owned(),
