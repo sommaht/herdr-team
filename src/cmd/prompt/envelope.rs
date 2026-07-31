@@ -264,7 +264,7 @@ mod tests {
              audit the CLI surface\n\
              </mail>\n\
              <how-to-reply>\n\
-             herdr-agent-tools prompt w4:p3 --no-reply - <<'EOF'\n\
+             herdr-team prompt w4:p3 --no-reply - <<'EOF'\n\
              {{your reply}}\n\
              EOF\n\
              </how-to-reply>"

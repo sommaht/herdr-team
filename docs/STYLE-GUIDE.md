@@ -1,4 +1,4 @@
-# Rust style — herdr-agent-tools domain layer
+# Rust style — herdr-team domain layer
 
 Core Rust style is owned by the **`rust-style` skill**, vendored into this repository at
 `.claude/skills/rust-style/`: `SKILL.md` carries the generation rules, `references/gate.md` is
@@ -6,7 +6,7 @@ the binding rule set (stable `RS-###` IDs), the other `references/` files carry 
 behind them, and `scripts/check.sh` is the mechanical gate — its `assets/pre-commit` is
 installed as this repo's hook. That rule set is not restated here.
 
-This file holds only what is **specific to herdr-agent-tools**. Where it is silent, the skill
+This file holds only what is **specific to herdr-team**. Where it is silent, the skill
 applies. An override of a core rule cites its RS ID explicitly; see **RS-030** under "The
 herdr seam".
 

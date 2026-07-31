@@ -30,7 +30,7 @@ use crate::harness;
 // =====================================================================================================================
 
 /// The environment variable that overrides where the user's config file is looked for.
-const PATH_VARIABLE: &str = "HERDR_AGENT_TOOLS_CONFIG";
+const PATH_VARIABLE: &str = "HERDR_TEAM_CONFIG";
 
 /// What a working config file looks like, quoted back when none was found.
 const EXAMPLE: &str = "\
@@ -533,7 +533,7 @@ prompt_file = 'review.md'
         let root = tempfile::tempdir().unwrap();
         let user_path = root.path().join("user.toml");
         fs::write(&user_path, user).unwrap();
-        let repository_path = root.path().join("project/.herdr-agent-tools/config.toml");
+        let repository_path = root.path().join("project/.herdr-team/config.toml");
         fs::create_dir_all(repository_path.parent().unwrap()).unwrap();
         fs::write(&repository_path, repository).unwrap();
         (root, user_path, repository_path)
