@@ -19,6 +19,28 @@ pub const OPERATOR: &str = "operator";
 /// instructing a recipient to run something that no longer exists.
 const TOOL: &str = env!("CARGO_PKG_NAME");
 
+/// The digits a message id is spelled in, and the base the arithmetic runs in.
+///
+/// Lowercase alphanumerics so an id cannot be mistaken for punctuation in a rendered composer, and
+/// so the whole token survives any quoting a harness applies to what it echoes.
+const ID_ALPHABET: &[u8; 36] = b"0123456789abcdefghijklmnopqrstuvwxyz";
+
+/// [`ID_ALPHABET`]'s length, in the width the id arithmetic is done in.
+const ID_BASE: u128 = 36;
+
+/// How many digits a message id runs to.
+///
+/// Six, which is short enough to survive Codex truncating a queued message to its opening line and
+/// wide enough that two ids collide only if two sends land in the same nanosecond window — and a
+/// collision costs a false "delivered", never a wrong delivery.
+const ID_LENGTH: usize = 6;
+
+/// The value an id wraps at: [`ID_BASE`] raised to [`ID_LENGTH`].
+///
+/// A constant rather than the expression inline, so the one width conversion the exponent needs
+/// happens once, at compile time, where it cannot fail at all.
+const ID_MODULUS: u128 = ID_BASE.pow(ID_LENGTH as u32);
+
 // =====================================================================================================================
 // Reply
 // =====================================================================================================================
@@ -61,12 +83,24 @@ impl Reply {
 /// one, its pane id when it did not, and [`OPERATOR`] for a person. `reply_to` is present when a
 /// reply is invited and absent otherwise — its presence is the whole signal, which is why no
 /// attribute duplicates the address the tail already holds.
+///
+/// `id` exists so delivery can be proven by reading the recipient's pane. It rides on the *opening*
+/// tag rather than the closing one because the two harnesses render a queued message differently:
+/// Claude Code expands the whole body into its transcript, but Codex shows only the first line or
+/// two under a "messages to be submitted" banner. The opening tag is the one line both of them
+/// render, so it is the only place an id is legible in either.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Envelope {
     /// The sender's identity, never empty.
     from: String,
     /// Where a reply is addressed, absent when none is invited.
     reply_to: Option<String>,
+    /// This message's own id, echoed in the opening tag.
+    ///
+    /// A `String` rather than a newtype: it is minted in one place, rendered in one, and searched
+    /// for in one, with nothing to parse and nothing to validate. It never reaches herdr and never
+    /// crosses a wire boundary.
+    id: String,
 }
 
 impl Envelope {
@@ -85,18 +119,26 @@ impl Envelope {
             Err(_) => no_pane(),
         };
 
-        Self::addressed(identity, reply)
+        Self::addressed(identity, reply, mint_id())
     }
 
     /// Applies the reply decision to an already-resolved identity.
-    fn addressed((from, sender_address): (String, Option<String>), reply: &Reply) -> Self {
+    ///
+    /// The id is passed in rather than minted here so that every decision this makes stays a
+    /// function of its arguments, which is what lets the tests below pin exact rendered text.
+    fn addressed((from, sender_address): (String, Option<String>), reply: &Reply, id: String) -> Self {
         let reply_to = match reply {
             Reply::ToSender => sender_address,
             Reply::To(target) => Some(target.clone()),
             Reply::None => None,
         };
 
-        Self { from, reply_to }
+        Self { from, reply_to, id }
+    }
+
+    /// This message's id, for a caller proving delivery by reading the recipient's pane.
+    pub fn id(&self) -> &str {
+        &self.id
     }
 
     /// Renders the delivered text: the body inside `<mail>`, then a sibling `<how-to-reply>`.
@@ -107,10 +149,10 @@ impl Envelope {
     ///
     /// Nothing is escaped. `from` needs none — an agent name is lowercase letters, digits, `-` and
     /// `_`, a pane id is alphanumerics and `:`, and [`OPERATOR`] is a literal, so none of them can
-    /// carry a quote. The body needs none by contract: it is the sender's text and it is delivered
-    /// exactly as it arrived.
+    /// carry a quote. `id` needs none by construction, being six digits of [`ID_ALPHABET`]. The body
+    /// needs none by contract: it is the sender's text and it is delivered exactly as it arrived.
     pub fn wrap(&self, body: &NonEmptyText) -> String {
-        let mut text = format!("<mail from=\"{}\">\n{body}\n</mail>", self.from);
+        let mut text = format!("<mail from=\"{}\" id=\"{}\">\n{body}\n</mail>", self.from, self.id);
 
         if let Some(address) = &self.reply_to {
             // The heredoc is the form that survives a report: a reply about code holds a quote or a
@@ -137,6 +179,34 @@ impl Envelope {
 /// The identity of a caller that is not in a herdr pane at all: a person, with nowhere to reply.
 fn no_pane() -> (String, Option<String>) {
     (OPERATOR.to_owned(), None)
+}
+
+/// Mints an id for one message: the clock's nanoseconds, in [`ID_LENGTH`] digits of [`ID_ALPHABET`].
+///
+/// The clock rather than a random source, because the standard library has one and randomness would
+/// be a dependency bought for a token whose only job is to be different from the last one. Two
+/// prompts are sent milliseconds apart at the very closest, which is millions of nanoseconds.
+///
+/// A clock that cannot answer yields zeros rather than failing. The id is evidence, not a
+/// guarantee — a caller that cannot find it reports delivery unproven and carries on, which is the
+/// same answer it would give for a snapshot it could not read.
+fn mint_id() -> String {
+    let mut value = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_nanos())
+        % ID_MODULUS;
+
+    let mut id = [b'0'; ID_LENGTH];
+    for digit in id.iter_mut().rev() {
+        // RS-012: `try_from` rather than `as`, though the remainder of a division by 36 cannot fail
+        // to be a `usize` on any target this builds for. The panic is the honest spelling of that.
+        let index = usize::try_from(value % ID_BASE).expect("a remainder of 36 is a usize");
+        *digit = ID_ALPHABET[index];
+        value /= ID_BASE;
+    }
+
+    // Every byte came out of an ASCII alphabet, so this cannot be invalid UTF-8.
+    String::from_utf8(id.to_vec()).expect("the alphabet is ASCII")
 }
 
 /// Turns herdr's answer about the calling pane into a `from` and an optional reply address.
@@ -185,11 +255,12 @@ mod tests {
         let envelope = Envelope {
             from: "dispatcher".to_owned(),
             reply_to: Some("w4:p3".to_owned()),
+            id: "k7m2x9".to_owned(),
         };
 
         assert_eq!(
             envelope.wrap(&body("audit the CLI surface")),
-            "<mail from=\"dispatcher\">\n\
+            "<mail from=\"dispatcher\" id=\"k7m2x9\">\n\
              audit the CLI surface\n\
              </mail>\n\
              <how-to-reply>\n\
@@ -205,9 +276,14 @@ mod tests {
         let envelope = Envelope {
             from: "w4:p9".to_owned(),
             reply_to: Some("w4:p9".to_owned()),
+            id: "k7m2x9".to_owned(),
         };
 
-        assert!(envelope.wrap(&body("go")).starts_with("<mail from=\"w4:p9\">\n"));
+        assert!(
+            envelope
+                .wrap(&body("go"))
+                .starts_with("<mail from=\"w4:p9\" id=\"k7m2x9\">\n")
+        );
     }
 
     #[test]
@@ -215,11 +291,12 @@ mod tests {
         let envelope = Envelope {
             from: "worker".to_owned(),
             reply_to: None,
+            id: "k7m2x9".to_owned(),
         };
 
         assert_eq!(
             envelope.wrap(&body("found 4 undocumented flags")),
-            "<mail from=\"worker\">\nfound 4 undocumented flags\n</mail>"
+            "<mail from=\"worker\" id=\"k7m2x9\">\nfound 4 undocumented flags\n</mail>"
         );
     }
 
@@ -228,11 +305,12 @@ mod tests {
         let envelope = Envelope {
             from: OPERATOR.to_owned(),
             reply_to: None,
+            id: "k7m2x9".to_owned(),
         };
 
         assert_eq!(
             envelope.wrap(&body("rebase onto main")),
-            "<mail from=\"operator\">\nrebase onto main\n</mail>"
+            "<mail from=\"operator\" id=\"k7m2x9\">\nrebase onto main\n</mail>"
         );
     }
 
@@ -248,11 +326,12 @@ mod tests {
         let envelope = Envelope {
             from: "worker".to_owned(),
             reply_to: None,
+            id: "k7m2x9".to_owned(),
         };
 
         assert_eq!(
             envelope.wrap(&body(hostile)),
-            format!("<mail from=\"worker\">\n{hostile}\n</mail>")
+            format!("<mail from=\"worker\" id=\"k7m2x9\">\n{hostile}\n</mail>")
         );
     }
 
@@ -261,6 +340,7 @@ mod tests {
         let envelope = Envelope {
             from: "dispatcher".to_owned(),
             reply_to: None,
+            id: "k7m2x9".to_owned(),
         };
 
         assert!(
@@ -277,18 +357,56 @@ mod tests {
         let envelope = Envelope {
             from: OPERATOR.to_owned(),
             reply_to: None,
+            id: "k7m2x9".to_owned(),
         };
 
         assert!(envelope.wrap(&body("x")).parse::<NonEmptyText>().is_ok());
     }
 
+    /// The id is the anchor a pane-reading delivery check searches for, so its shape is a contract.
+    #[test]
+    fn a_minted_id_is_six_digits_of_the_alphabet_and_differs_between_messages() {
+        let id = mint_id();
+
+        assert_eq!(id.len(), ID_LENGTH, "{id}");
+        assert!(
+            id.bytes().all(|digit| ID_ALPHABET.contains(&digit)),
+            "{id} left the alphabet"
+        );
+
+        // Nanoseconds apart is millions of ticks apart, so two sends never share an id in practice.
+        // Asserted over a loop rather than a pair because a single unequal pair would also pass on a
+        // clock that only ever moved once.
+        let minted: std::collections::BTreeSet<String> = (0..8).map(|_| mint_id()).collect();
+        assert!(minted.len() > 1, "every id in a run came out identical: {minted:?}");
+    }
+
+    /// The id rides on the opening tag, which is the line both harnesses render for a queued message.
+    #[test]
+    fn the_id_is_on_the_opening_tag_where_a_truncating_harness_still_shows_it() {
+        let envelope = Envelope {
+            from: "dispatcher".to_owned(),
+            reply_to: Some("w4:p3".to_owned()),
+            id: "k7m2x9".to_owned(),
+        };
+
+        let wrapped = envelope.wrap(&body("audit the CLI surface"));
+        let opening = wrapped.lines().next().expect("a rendering has a first line");
+
+        assert!(opening.contains("k7m2x9"), "{opening}");
+        assert_eq!(envelope.id(), "k7m2x9");
+        // And nowhere else: a second copy in the tail would be a second thing to keep in step.
+        assert_eq!(wrapped.matches("k7m2x9").count(), 1);
+    }
+
     #[test]
     fn a_caller_outside_a_herdr_pane_is_a_person_and_invites_no_reply() {
         assert_eq!(
-            Envelope::addressed(no_pane(), &Reply::ToSender),
+            Envelope::addressed(no_pane(), &Reply::ToSender, "k7m2x9".to_owned()),
             Envelope {
                 from: OPERATOR.to_owned(),
-                reply_to: None
+                reply_to: None,
+                id: "k7m2x9".to_owned(),
             }
         );
     }
@@ -298,10 +416,11 @@ mod tests {
         // Routing a worker's report at a collector is meant, and it is the only way an operator
         // message carries a tail.
         assert_eq!(
-            Envelope::addressed(no_pane(), &Reply::To("collector".to_owned())),
+            Envelope::addressed(no_pane(), &Reply::To("collector".to_owned()), "k7m2x9".to_owned()),
             Envelope {
                 from: OPERATOR.to_owned(),
                 reply_to: Some("collector".to_owned()),
+                id: "k7m2x9".to_owned(),
             }
         );
     }
@@ -311,10 +430,11 @@ mod tests {
         let resolved = ("dispatcher".to_owned(), Some("w4:p3".to_owned()));
 
         assert_eq!(
-            Envelope::addressed(resolved, &Reply::None),
+            Envelope::addressed(resolved, &Reply::None, "k7m2x9".to_owned()),
             Envelope {
                 from: "dispatcher".to_owned(),
-                reply_to: None
+                reply_to: None,
+                id: "k7m2x9".to_owned(),
             }
         );
     }
