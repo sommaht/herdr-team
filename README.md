@@ -3,29 +3,29 @@
 Launching a [herdr](https://herdr.dev) agent by hand is two steps: herdr starts an agent only in a
 pane that already exists and is sitting at an interactive shell prompt, so you create a surface,
 dig the new pane's id out of the JSON, and then start the agent in it. This does both in one
-command, resolves the agent's kind and its usual flags from a named preset, and takes prompt text
-on stdin.
+command, resolves the agent's kind and its usual flags from a named agent in the config, and takes
+prompt text on stdin.
 
 ## Commands
 
 | Command | Purpose |
 | ------- | ------- |
-| `spawn` | Create a pane, tab, or workspace and start a preset-configured agent in it |
+| `spawn` | Create a pane, tab, or workspace and start a configured agent in it |
 | `prompt` | Deliver a prompt to an agent that already exists |
 | `kill` | Close an agent's pane, refusing one that is mid-task |
-| `presets` | List what the preset config holds |
+| `agents` | List what the config holds |
 | `prime` | Print an agent-facing brief on driving this CLI |
 
 `prime` is written for a session-start hook. `--hook <harness>` asks that harness to wrap the brief
 in its host's envelope; each harness owns its own shape, so a host whose contract differs is one impl
-rather than a flag change. It makes no herdr call and a config it cannot read costs the preset table
+rather than a flag change. It makes no herdr call and a config it cannot read costs the agent table
 and nothing else, because a hook that fails is worse than one that says little.
 
 ```
-herdr-agent-tools spawn reviewer --placement tab --preset opus --prompt "Review the branch"
+herdr-agent-tools spawn reviewer --placement tab --agent opus --prompt "Review the branch"
 git diff | herdr-agent-tools prompt reviewer -
 herdr-agent-tools kill reviewer
-herdr-agent-tools presets
+herdr-agent-tools agents
 ```
 
 `prompt` and `kill` each refuse one thing by default, and `--force` is the override for both: a
@@ -33,30 +33,65 @@ composer holding someone's unsent text, and an agent still working or blocked. N
 changes anything, and both exit 5. Neither clears on a timer either — a composer is cleared by the
 person typing into it — so the retry belongs after the named state changes, not on a loop.
 
-## Presets
+## Agents
 
 `$XDG_CONFIG_HOME/herdr-agent-tools/config.toml`, falling back to
 `~/.config/herdr-agent-tools/config.toml`. Override the location with `--config` or with
 `HERDR_AGENT_TOOLS_CONFIG`.
 
-Presets are what the file holds today, and the filename deliberately does not say so: a name
+Agents are what the file holds today, and the filename deliberately does not say so: a name
 that names one table has to change the first time a second one is added.
 
 ```toml
 default = 'reviewer'
 
-[presets.reviewer]
+[agents.cc]
 kind = 'claude'
-args = ['--model', 'opus']
+args = ['--disallowed-tools', 'AskUserQuestion']
 
-[presets.cheap]
-kind = 'codex'
-args = ['--model', 'gpt-5-low', '--no-alt-screen']
+[agents.reviewer]
+base = 'cc'
+model = 'opus'
+effort = 'xhigh'
 ```
 
-The preset name is the table key, so a duplicate name is inexpressible. `args` is an array only:
+The agent name is the table key, so a duplicate name is inexpressible. `args` is an array only:
 a string form would have to be split into shell words, and herdr takes the agent's arguments as an
 argument vector, so nothing here needs shell quoting.
+
+An agent may inherit from another. `base` names one, and every field the child states wins —
+except `args`, which appends after the base's, since agent CLIs are last-flag-wins and a child
+adding one flag should not have to restate the rest.
+
+`model` and `effort` are fields rather than flags because each CLI spells them differently: Claude
+Code takes `--model opus --effort xhigh`, Codex takes `--model … -c model_reasoning_effort=xhigh`.
+This tool knows how to drive two of herdr's kinds, so an agent that sets either under a third is
+dropped with a warning naming the kinds that can express them.
+
+`prompt_file` names a file that is prepended to the agent's first prompt, resolved relative to the
+directory of the config file that declared it:
+
+```toml
+[agents.reviewer]
+base = 'opus'
+prompt_file = 'review.md'
+```
+
+`spawn reviewer --prompt "start with auth"` then delivers the file's contents, a blank line, and
+the prompt, as one message. With no `--prompt` the file is delivered alone. A file that is missing
+or blank is a refusal, raised before anything is created.
+
+## The repository layer
+
+A repository may carry its own `.herdr-agent-tools/config.toml`, found by walking up from the
+directory a spawn is run in. It merges over the user's: its `default` wins when it declares one,
+and its agents replace the user's **by name and whole** — a repository agent that wants the user's
+flags says `base = '<name>'`, which resolves across both files. Either layer alone is enough.
+`--config` points the user layer somewhere else and the repository layer still merges over it.
+
+Four things make one agent unusable, and each warns and drops that agent rather than failing the
+command: a `base` no config declares, a cycle, no `kind` anywhere in the chain, and `model` or
+`effort` under a kind this build cannot drive. Everything else in the config keeps working.
 
 ## Output
 
@@ -121,7 +156,7 @@ Defects rather than deferrals: each is understood, reproduced, and not yet fixed
   will accept input — while herdr reports the pane interactive and ready, because a live prompt is
   what it can see. A first prompt delivered into that state answers the dialog instead of being
   read, and only the re-send above puts the real prompt in the composer. Observed with a Claude Code
-  preset that does not skip permission checks; a Codex preset opened straight to a composer. There is
+  agent that does not skip permission checks; a Codex agent opened straight to a composer. There is
   no fix inside this tool that does not amount to answering someone's security prompt for them,
   which is why it is recorded rather than worked around.
 

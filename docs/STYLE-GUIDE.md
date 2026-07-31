@@ -46,7 +46,7 @@ Lightweight sub-headers are earned, not automatic.
   and answers `agent_not_found` or `agent_target_ambiguous` itself. A context type would earn
   its keep only by holding a read every command answers from, and there is none — the
   environment lookups are two `env::var` calls. Loading anything eagerly would also be wrong:
-  a malformed preset file would then break `prompt`, which never touches presets.
+  a malformed config would then break `prompt`, which never reads one.
 - **`herdr`** — every interaction with herdr, and the seam that runs them. The module root
   carries `run`, `HerdrError`, and the stream discipline both depend on; `herdr::surface` owns
   the three ways to make a pane, and `herdr::agent` owns what a command does to an agent in
@@ -55,8 +55,9 @@ Lightweight sub-headers are earned, not automatic.
   kind: its composer's prompt marker. Touches no process and no pane — it is handed a
   detection snapshot as `&str` and answers whether the composer holds text. The region rule
   lives here once; each kind supplies only its marker.
-- **`config`** — the preset file: its schema, where it is found, and how it is read. The only
-  disk I/O in the crate, which is the boundary it names.
+- **`config`** — the config file: its schema, where its two layers are found, and how they are
+  read. The only disk I/O in the crate, which is the boundary it names. It is also where an
+  agent's `prompt_file` is read, since the file a config points at is part of the config.
 - **`cmd`** — the subcommands, their side-effect ordering, and the exit-status contract. There
   is deliberately no parent grouping: three sibling commands share no distinction a parent
   would mark.
@@ -215,7 +216,7 @@ Every process invocation is built from `Command` args — never an interpolated 
 takes the agent's arguments as an argument vector, so nothing this crate *runs* needs shell
 quoting.
 
-A preset's `args` is therefore an **array only**. A string form would have to be split into shell
+An agent's `args` is therefore an **array only**. A string form would have to be split into shell
 words, which means reimplementing shell word-splitting for a value handed to `Command`.
 
 **The one exception is `herdr pane run`**, whose argument is a command line herdr types into a
@@ -260,7 +261,7 @@ real herdr server.
 ## Dependencies
 
 Extending the skill's sanctioned set, this repo also uses `clap` + `clap-stdin` (CLI) and
-`toml` (the preset file), plus `tempfile` for test temp directories.
+`toml` (the config file), plus `tempfile` for test temp directories.
 
 ## Forbidden
 
@@ -270,7 +271,8 @@ Extending the skill's sanctioned set, this repo also uses `clap` + `clap-stdin` 
 - Shell-string interpolation outside the one quoting function in `herdr::surface`; every process
   invocation is built from `Command` args.
 - Process I/O in `harness`, whose contract is answering from the snapshot it is handed.
-- A prompt, a preset's arguments, or captured terminal content in an error message or a log.
+- A prompt, an agent's arguments or the `model` and `effort` that become them, or captured
+  terminal content in an error message or a log.
 - Re-wording a herdr error, or restating a herdr response in a type of our own beyond the
   fields the flow branches on.
 - Duplicating a validation herdr already performs, absent the stated precondition exception.

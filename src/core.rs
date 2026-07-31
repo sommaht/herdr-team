@@ -9,7 +9,7 @@
 //! server-side — `agent prompt <target>` takes a pane id or a unique agent name and answers
 //! `agent_not_found` or `agent_target_ambiguous` itself — so a context type would earn its keep
 //! only by holding a read every command answers from, and there is none. Loading anything eagerly
-//! would also be wrong: a malformed preset file would then break `prompt`, which never reads one.
+//! would also be wrong: a malformed config would then break `prompt`, which never reads one.
 
 mod backoff;
 mod sink;
