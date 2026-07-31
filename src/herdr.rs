@@ -89,7 +89,7 @@ struct Envelope<T> {
 /// Failure of a herdr invocation.
 ///
 /// Every variant carries the herdr command's **name** and never its arguments — the argument to
-/// `agent prompt` is the prompt text, and a preset's arguments ride on `agent start`.
+/// `agent prompt` is the prompt text, and an agent's arguments ride on `agent start`.
 #[derive(Debug, Error)]
 pub enum HerdrError {
     /// herdr could not be launched — not installed, or not on `PATH`.
@@ -114,7 +114,7 @@ pub enum HerdrError {
     /// herdr exited non-zero without an error object — a client-side refusal, which it reports as a
     /// plain line with exit 2.
     ///
-    /// The message is stderr's **first line only**. That line can never hold a prompt or a preset's
+    /// The message is stderr's **first line only**. That line can never hold a prompt or an agent's
     /// arguments: herdr takes the prompt positionally at index 1 before it starts reading options,
     /// and agent arguments live after `--`, past everything its parser echoes.
     #[error("herdr {command} failed: {message}")]
@@ -242,7 +242,7 @@ pub struct HerdrRef {
 /// The herdr command's name: the group and the subcommand, and nothing after them.
 ///
 /// Every call in this crate is built as `<group> <subcommand> [target] [args…]`, so two words is
-/// the whole name — and stopping there is what keeps a target, a prompt, and a preset's arguments
+/// the whole name — and stopping there is what keeps a target, a prompt, and an agent's arguments
 /// out of every error message this module produces.
 fn command_name(args: &[String]) -> String {
     args.iter().take(2).cloned().collect::<Vec<String>>().join(" ")

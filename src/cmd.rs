@@ -177,10 +177,10 @@ mod tests {
     use super::*;
 
     #[derive(Debug, thiserror::Error)]
-    #[error("no preset named opus")]
-    struct NoSuchPreset;
+    #[error("no agent named opus")]
+    struct NoSuchAgent;
 
-    impl AsExitStatus for NoSuchPreset {
+    impl AsExitStatus for NoSuchAgent {
         fn exit_status(&self) -> ExitStatus {
             ExitStatus::NotFound
         }
@@ -227,12 +227,12 @@ mod tests {
 
     #[test]
     fn a_failure_renders_its_errors_display_form_in_both_modes() {
-        let failure = Failure::new(&NoSuchPreset);
+        let failure = Failure::new(&NoSuchAgent);
 
-        assert_eq!(failure.to_string(), "no preset named opus");
+        assert_eq!(failure.to_string(), "no agent named opus");
         assert_eq!(
             serde_json::to_string(&failure).unwrap(),
-            r#"{"message":"no preset named opus"}"#
+            r#"{"message":"no agent named opus"}"#
         );
     }
 }

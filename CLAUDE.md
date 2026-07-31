@@ -5,7 +5,7 @@
    guessing a flag. Leaf subcommands fall back to top-level help, so read the group. Never run
    bare `herdr`: it launches or attaches the TUI.
 
-3) **Never put a prompt, a preset's arguments, or captured terminal content in an error
+3) **Never put a prompt, an agent's arguments, or captured terminal content in an error
    message, a diagnostic, or a log.** The argument to `herdr agent prompt` is the prompt text,
    and the composer guard's input is a snapshot of someone's half-written message. A refusal
    says the composer holds unsent text; it never says what that text is.
