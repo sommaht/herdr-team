@@ -115,9 +115,9 @@ const STYLED: Probe = Probe {
 ///
 /// The judgment methods have defaults, so an impl states only what makes it different: the deferred
 /// placeholder-vs-typed-text work overrides [`composer_occupied`](Self::composer_occupied), and a
-/// harness that renders its composer somewhere else overrides [`probe`](Self::probe). The three
-/// *declarations* — kind, marker, and hook envelope — are required, because each is a claim about a
-/// specific host that someone has to make deliberately.
+/// harness that renders its composer somewhere else overrides [`probe`](Self::probe). The four
+/// *declarations* — kind, marker, hook envelope, and how it spells model and effort — are required,
+/// because each is a claim about a specific host that someone has to make deliberately.
 pub trait AgentHarness: std::fmt::Debug {
     /// herdr's own kind label for this harness, as `agent get` reports it.
     fn kind(&self) -> &'static str;
@@ -137,6 +137,21 @@ pub trait AgentHarness: std::fmt::Debug {
     /// [`serde_json::Error`] if the envelope cannot be serialized, which two string fields cannot
     /// provoke — the signature carries it rather than panicking on a case that would be a bug here.
     fn hook(&self, context: &str) -> Result<String, serde_json::Error>;
+
+    /// The flags this harness's CLI expresses `model` and `effort` as.
+    ///
+    /// Required rather than defaulted, for the reason [`hook`](Self::hook) is: a harness added later
+    /// must not inherit a spelling nobody checked against its CLI. The two fields are independent —
+    /// either may be set without the other — and an empty vector is the answer only when neither is.
+    ///
+    /// A kind absent from [`HARNESSES`] has no answer at all, which is why the config layer drops an
+    /// agent that asks for these under one rather than starting it without them.
+    // The declaration lands before its caller does: the config layer's `Agent::agent_args` is what
+    // asks, and the tests here already do. `expect` rather than `allow` so the compiler takes this
+    // attribute back off us — an unfulfilled expectation is itself a warning the moment that caller
+    // exists — and `not(test)` because under `cfg(test)` the expectation is already unfulfilled.
+    #[cfg_attr(not(test), expect(dead_code))]
+    fn tuning(&self, model: Option<&str>, effort: Option<&str>) -> Vec<String>;
 
     /// What this harness needs read in order to answer.
     ///
