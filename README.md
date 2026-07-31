@@ -83,8 +83,13 @@ or blank is a refusal, raised before anything is created.
 
 ## The repository layer
 
-A repository may carry its own `.herdr-agent-tools/config.toml`, found by walking up from the
-directory a spawn is run in. It merges over the user's: its `default` wins when it declares one,
+A repository may carry its own config, found by walking up from the directory a spawn is run in.
+Either `.herdr-agent-tools/config.toml` or `.herdr-agent-tools.config.toml` — the directory when an
+agent's `prompt_file` wants somewhere to live beside the config that names it, the flat file when
+one file is the whole config. Both are tried at each directory on the way up, so the nearer one
+wins whichever form it takes, and the directory wins a tie between the two in one place.
+
+It merges over the user's: its `default` wins when it declares one,
 and its agents replace the user's **by name and whole** — a repository agent that wants the user's
 flags says `base = '<name>'`, which resolves across both files. Either layer alone is enough.
 `--config` points the user layer somewhere else and the repository layer still merges over it.

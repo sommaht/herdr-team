@@ -18,11 +18,16 @@ use std::path::{Path, PathBuf};
 /// the name.
 const RELATIVE_PATH: &str = "herdr-agent-tools/config.toml";
 
-/// Where a repository carries its own, relative to any directory in it.
+/// Where a repository carries its own, relative to any directory in it, in the order they are tried.
 ///
-/// A directory rather than a dotfile, so an agent's `prompt_file` has somewhere to live beside the
-/// config that names it.
-const REPOSITORY_PATH: &str = ".herdr-agent-tools/config.toml";
+/// The directory form leads because it is the one that can carry more: an agent's `prompt_file` has
+/// somewhere to live beside the config that names it. The flat file is for a repository willing to
+/// spend a config on one file and not a directory — its `prompt_file` then resolves against the
+/// directory the file sits in, which is the same rule read from the same place.
+///
+/// Order settles a tie inside one directory and nothing else. Which form is *nearer* is what decides
+/// across directories, and [`repository`] tries both at each ancestor to keep it that way.
+const REPOSITORY_PATHS: [&str; 2] = [".herdr-agent-tools/config.toml", ".herdr-agent-tools.config.toml"];
 
 // =====================================================================================================================
 // The User Layer
@@ -90,9 +95,13 @@ pub fn user(
 /// It does not stop at a repository boundary. Locating one is a herdr call this crate makes only for
 /// worktree spawns, and paying for it on every load — to refuse a file the caller placed on purpose —
 /// buys nothing.
+///
+/// Both spellings in [`REPOSITORY_PATHS`] are tried at each ancestor before the walk moves up, so a
+/// nearer config wins whichever form it takes. Trying one form all the way to the root before the
+/// other would let a distant directory config beat the flat file sitting in the caller's own project.
 pub fn repository(cwd: &Path) -> Option<PathBuf> {
     cwd.ancestors()
-        .map(|directory| directory.join(REPOSITORY_PATH))
+        .flat_map(|directory| REPOSITORY_PATHS.map(|relative| directory.join(relative)))
         .find(|candidate| candidate.is_file())
 }
 
@@ -105,6 +114,15 @@ mod tests {
     use std::fs;
 
     use super::*;
+
+    /// Writes a config at `path`, making whatever directories it needs first.
+    ///
+    /// Every repository test is that pair of lines, and the directory form cannot skip the first —
+    /// which is the step a test would forget while adding the flat form beside it.
+    fn write_config(path: &Path) {
+        fs::create_dir_all(path.parent().expect("a config path has a parent")).unwrap();
+        fs::write(path, "default = 'x'\n").unwrap();
+    }
 
     #[test]
     fn the_search_order_is_explicit_then_the_environment_then_xdg_then_home() {
@@ -150,17 +168,19 @@ mod tests {
         assert!(!user(None, None, None, Some("/home".as_ref())).unwrap().named());
     }
 
+    /// Both forms are the same layer, found the same way, from anywhere beneath them.
     #[test]
     fn a_repository_config_is_found_from_any_directory_beneath_it() {
-        let root = tempfile::tempdir().unwrap();
-        let config = root.path().join(".herdr-agent-tools/config.toml");
-        fs::create_dir_all(config.parent().unwrap()).unwrap();
-        fs::write(&config, "default = 'x'\n").unwrap();
-        let deep = root.path().join("src/api/handlers");
-        fs::create_dir_all(&deep).unwrap();
+        for relative in REPOSITORY_PATHS {
+            let root = tempfile::tempdir().unwrap();
+            let config = root.path().join(relative);
+            write_config(&config);
+            let deep = root.path().join("src/api/handlers");
+            fs::create_dir_all(&deep).unwrap();
 
-        assert_eq!(repository(&deep), Some(config.clone()));
-        assert_eq!(repository(root.path()), Some(config));
+            assert_eq!(repository(&deep), Some(config.clone()), "from beneath {relative}");
+            assert_eq!(repository(root.path()), Some(config), "from beside {relative}");
+        }
     }
 
     #[test]
@@ -169,12 +189,35 @@ mod tests {
         let outer = root.path().join(".herdr-agent-tools/config.toml");
         let inner = root.path().join("nested/.herdr-agent-tools/config.toml");
         for path in [&outer, &inner] {
-            fs::create_dir_all(path.parent().unwrap()).unwrap();
-            fs::write(path, "default = 'x'\n").unwrap();
+            write_config(path);
         }
 
         assert_eq!(repository(&root.path().join("nested")), Some(inner));
         assert_eq!(repository(root.path()), Some(outer));
+    }
+
+    /// The tie the constant's order exists to settle, and the only thing it settles.
+    #[test]
+    fn the_directory_form_wins_over_a_flat_file_in_the_same_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let directory_form = root.path().join(".herdr-agent-tools/config.toml");
+        write_config(&directory_form);
+        write_config(&root.path().join(".herdr-agent-tools.config.toml"));
+
+        assert_eq!(repository(root.path()), Some(directory_form));
+    }
+
+    /// Nearest beats form, which is what a walk that exhausted one spelling before trying the other
+    /// would get wrong — and would get wrong silently, since both configs are real files.
+    #[test]
+    fn a_nearer_flat_file_beats_a_directory_form_further_up() {
+        let root = tempfile::tempdir().unwrap();
+        write_config(&root.path().join(".herdr-agent-tools/config.toml"));
+        let nested = root.path().join("nested");
+        let flat_form = nested.join(".herdr-agent-tools.config.toml");
+        write_config(&flat_form);
+
+        assert_eq!(repository(&nested), Some(flat_form));
     }
 
     #[test]
@@ -187,9 +230,11 @@ mod tests {
     /// A directory of that name is not a config file, so the walk keeps going.
     #[test]
     fn a_directory_where_the_file_should_be_is_not_a_config() {
-        let root = tempfile::tempdir().unwrap();
-        fs::create_dir_all(root.path().join(".herdr-agent-tools/config.toml")).unwrap();
+        for relative in REPOSITORY_PATHS {
+            let root = tempfile::tempdir().unwrap();
+            fs::create_dir_all(root.path().join(relative)).unwrap();
 
-        assert_eq!(repository(root.path()), None);
+            assert_eq!(repository(root.path()), None, "a directory named {relative}");
+        }
     }
 }
