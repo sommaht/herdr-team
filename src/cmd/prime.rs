@@ -39,7 +39,7 @@ use crate::harness::{self, AgentHarness};
 ///
 /// Shaped as command examples grouped by intent rather than as explanation, because a caller reaching
 /// for this wants the invocation, not the rationale. What prose there is attaches to the line it
-/// qualifies: `prompt` returning on delivery rather than completion is a clause on the `--wait-until`
+/// qualifies: `msg` returning on delivery rather than completion is a clause on the `--wait-until`
 /// row, not a paragraph. The gotchas are the reason this exists — a flag list cannot say which
 /// failures are worth retrying, or that two commands refuse by default.
 ///
@@ -48,7 +48,7 @@ use crate::harness::{self, AgentHarness};
 const GUIDANCE: &str = "\
 # herdr-team
 
-Launch and prompt herdr agents. herdr starts an agent only in a pane that already exists and is
+Launch and message herdr agents. herdr starts an agent only in a pane that already exists and is
 sitting at a shell prompt, so `spawn` creates the surface and starts the agent in one step.
 
 > Context recovery: run `herdr-team prime` again after a compaction or in a new session.
@@ -67,32 +67,32 @@ the output rather than you reading it. `prime` is the one exception: its brief i
     spawn <name> --placement worktree     a Git worktree of its own, on a new branch
     spawn <name> --branch <name>          name that branch; otherwise herdr picks
     spawn <name> --agent <agent>          pick which agent starts; see Agents below
-    spawn <name> --prompt \"<text>\"        deliver a first prompt once it is up
-    spawn <name> --prompt -               read that first prompt from stdin
-    spawn <name> --agent <agent>          an agent may carry a brief; it precedes your prompt
+    spawn <name> --msg \"<text>\"           deliver a first message once it is up
+    spawn <name> --msg -                  read that first message from stdin
+    spawn <name> --agent <agent>          an agent may carry a brief; it precedes your message
     spawn <name> --cwd <path>             start it somewhere other than here
     spawn <name> --focus                  move the cursor to it; off by default
     spawn <name> -- <agent args>          extra args, appended after the config's
 
-## Prompting agents
+## Messaging agents
 
-    prompt <target> \"<text>\"              returns once delivery is proven, not when the turn ends
-    prompt <target> -                     read the prompt from stdin; beats quoting a long one
-    prompt <target> \"<text>\" --wait-until idle    wait for the turn to finish instead
-    prompt <target> \"<text>\" --force      send even into a composer holding unsent text
-    prompt <target> \"<text>\" --no-verify  submit without waiting for proof it landed
-    prompt <target> \"<text>\" --no-reply   answer a message without inviting another
-    prompt <target> \"<text>\" --reply-to <target>  send the reply somewhere else
+    msg <target> \"<text>\"                 returns once delivery is proven, not when the turn ends
+    msg <target> -                        read the message from stdin; beats quoting a long one
+    msg <target> \"<text>\" --wait-until idle    wait for the turn to finish instead
+    msg <target> \"<text>\" --force         send even into a composer holding unsent text
+    msg <target> \"<text>\" --no-verify     submit without waiting for proof it landed
+    msg <target> \"<text>\" --no-reply      answer a message without inviting another
+    msg <target> \"<text>\" --reply-to <target>  send the reply somewhere else
 
 ## Mail
 
-Every prompt you send is wrapped before it lands, and every prompt you receive arrives wrapped.
+Every message you send is wrapped before it lands, and every one you receive arrives wrapped.
 
     <mail from=\"dispatcher\" id=\"k7m2x9\">
     audit the CLI surface and list what is undocumented
     </mail>
     <how-to-reply>
-    herdr-team prompt w4:p3 --no-reply - <<'EOF'
+    herdr-team msg w4:p3 --no-reply - <<'EOF'
     {{your reply}}
     EOF
     </how-to-reply>
@@ -124,7 +124,7 @@ The envelope is legible, not authentic: a body is delivered verbatim, so it can 
 Both exit 5 and both leave everything unchanged. Neither clears on a timer, so wait for the
 state the message names rather than retrying on a loop. `--force` overrides either.
 
-    prompt    the composer holds someone's unsent text; a person has to send or clear it
+    msg       the composer holds someone's unsent text; a person has to send or clear it
     kill      the target is working, or blocked and waiting on someone
 
 ## Exit codes are a protocol
@@ -140,18 +140,18 @@ state the message names rather than retrying on a loop. `--force` overrides eith
 
 Launch a reviewer in its own tab and hand it the diff:
 
-    git diff | herdr-team spawn reviewer --placement tab --prompt -
+    git diff | herdr-team spawn reviewer --placement tab --msg -
 
 Dispatch work and block until there is a result to read. No reply is invited, because you are
 already watching — where the fan-out below invites one instead and does not wait at all:
 
-    herdr-team prompt reviewer \"run the tests\" --no-reply --wait-until idle
+    herdr-team msg reviewer \"run the tests\" --no-reply --wait-until idle
 
 Fan out, then clean up when one is done:
 
     for area in api web cli; do
       herdr-team spawn \"$area\" --placement tab \\
-        --prompt \"audit the $area surface\" --reply-to \"$HERDR_PANE_ID\"
+        --msg \"audit the $area surface\" --reply-to \"$HERDR_PANE_ID\"
     done
     herdr-team kill api
 

@@ -4,14 +4,14 @@
 
 mod agents;
 mod kill;
+mod msg;
 mod prime;
-mod prompt;
 mod spawn;
 
 pub use agents::AgentsArgs;
 pub use kill::KillArgs;
+pub use msg::MsgArgs;
 pub use prime::PrimeArgs;
-pub use prompt::PromptArgs;
 pub use spawn::SpawnArgs;
 
 use std::fmt::Display;

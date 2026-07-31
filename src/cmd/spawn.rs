@@ -17,8 +17,8 @@ use clap_stdin::MaybeStdin;
 use serde::Serialize;
 use thiserror::Error;
 
-use crate::cmd::prompt::envelope::{OPERATOR, Reply};
-use crate::cmd::prompt::{Proof, deliver};
+use crate::cmd::msg::envelope::{OPERATOR, Reply};
+use crate::cmd::msg::{Proof, deliver};
 use crate::cmd::{AsExitStatus, Cmd, ExitStatus};
 use crate::config::{Config, ConfigError};
 use crate::core::{AgentName, Backoff, NonEmptyText, PaneId, Sink};
@@ -49,8 +49,8 @@ const DEFAULT_SETTLE_MS: u64 = 10_000;
 #[derive(Debug, Args)]
 #[command(after_help = "Examples:\n  \
     herdr-team spawn reviewer --placement tab --agent opus\n  \
-    herdr-team spawn fixer --agent sonnet --prompt \"Fix the flaky tests\"\n  \
-    git diff | herdr-team spawn reviewer --prompt -\n  \
+    herdr-team spawn fixer --agent sonnet --msg \"Fix the flaky tests\"\n  \
+    git diff | herdr-team spawn reviewer --msg -\n  \
     herdr-team spawn big --placement workspace --agent fable -- --resume\n  \
     herdr-team spawn fixer --placement worktree --branch worktree/flake-fix")]
 pub struct SpawnArgs {
@@ -89,18 +89,21 @@ pub struct SpawnArgs {
     #[arg(long, value_name = "PATH")]
     config: Option<PathBuf>,
 
-    /// A first prompt to deliver once the agent is up; `-` reads it from stdin.
-    // `allow_hyphen_values` for the reason given on `prompt`'s own text argument: a prompt opening
-    // with `--` must be delivered rather than echoed back in a parser diagnostic. `--` cannot repair
-    // it here at all — that separator already belongs to `agent_args`.
-    #[arg(long, value_name = "TEXT", allow_hyphen_values = true)]
-    prompt: Option<MaybeStdin<NonEmptyText>>,
+    /// A first message to deliver once the agent is up; `-` reads it from stdin.
+    ///
+    /// Wrapped in the same envelope `msg` sends, which is why the reply flags below apply to it.
+    // `allow_hyphen_values` for the reason given on `msg`'s own text argument: text opening with
+    // `--` must be delivered rather than echoed back in a parser diagnostic. `--` cannot repair it
+    // here at all — that separator already belongs to `agent_args`. `--prompt` is the spelling this
+    // carried until the command was renamed, kept working and kept out of the help.
+    #[arg(long, alias = "prompt", value_name = "TEXT", allow_hyphen_values = true)]
+    msg: Option<MaybeStdin<NonEmptyText>>,
 
-    /// Omit the first prompt's reply instructions, closing the loop instead of inviting an answer.
+    /// Omit the first message's reply instructions, closing the loop instead of inviting an answer.
     #[arg(long, conflicts_with = "reply_to")]
     no_reply: bool,
 
-    /// Address the first prompt's reply instructions at this target instead of at the sender.
+    /// Address the first message's reply instructions at this target instead of at the sender.
     #[arg(long, value_name = "TARGET")]
     reply_to: Option<String>,
 
@@ -366,9 +369,9 @@ impl SpawnArgs {
 
         let started = self.start_when_settled(pane, &configured.kind, &configured.args)?;
 
-        // The agent's configured brief and the caller's `--prompt` are one message: an agent that got
+        // The agent's configured brief and the caller's `--msg` are one message: an agent that got
         // two would answer the first before hearing the second.
-        let Some(text) = first_prompt(configured.brief.as_ref(), self.prompt.as_deref()) else {
+        let Some(text) = first_prompt(configured.brief.as_ref(), self.msg.as_deref()) else {
             return Ok(Spawned {
                 placement: self.placement,
                 delivered: None,
@@ -594,9 +597,9 @@ pub enum SpawnError {
     /// herdr refused something; its message and code are carried verbatim.
     #[error(transparent)]
     Herdr(#[from] HerdrError),
-    /// The first prompt could not be delivered.
+    /// The first message could not be delivered.
     #[error(transparent)]
-    Prompt(#[from] crate::cmd::prompt::PromptError),
+    Msg(#[from] crate::cmd::msg::MsgError),
     /// The new pane never reached its shell prompt inside the settle window.
     #[error("pane {pane} was still not an available shell after {budget_ms}ms; raise --settle-timeout and retry")]
     PaneNeverSettled {
@@ -638,7 +641,7 @@ impl AsExitStatus for SpawnError {
             Self::Config(error) => error.exit_status_hint(),
             Self::NoWorkingDirectory(_) => ExitStatus::Failure,
             Self::Herdr(error) => error.exit_status(),
-            Self::Prompt(error) => error.exit_status(),
+            Self::Msg(error) => error.exit_status(),
             Self::PaneNeverSettled { .. } => ExitStatus::Conflict,
             Self::AfterSurface { error, .. } => error.exit_status(),
         }
@@ -647,7 +650,7 @@ impl AsExitStatus for SpawnError {
     fn herdr(&self) -> Option<HerdrRef> {
         match self {
             Self::Herdr(error) => Some(error.reference()),
-            Self::Prompt(error) => error.herdr(),
+            Self::Msg(error) => error.herdr(),
             Self::AfterSurface { error, .. } => error.herdr(),
             Self::MissingAnchor
             | Self::WorktreeOnlyFlag { .. }
@@ -812,9 +815,9 @@ mod tests {
     #[test]
     fn a_first_prompt_that_opens_with_a_dash_is_prompt_text_rather_than_a_flag() {
         for text in ["--force the issue", "-e", "--focus"] {
-            let args = parse(&["spawn", "reviewer", "--prompt", text]);
+            let args = parse(&["spawn", "reviewer", "--msg", text]);
 
-            assert_eq!(args.prompt.expect("a prompt was given").to_string(), text, "{text}");
+            assert_eq!(args.msg.expect("a prompt was given").to_string(), text, "{text}");
         }
     }
 
@@ -824,7 +827,7 @@ mod tests {
         let args = parse(&[
             "spawn",
             "reviewer",
-            "--prompt",
+            "--msg",
             "--go",
             "--placement",
             "tab",
@@ -832,7 +835,7 @@ mod tests {
             "--resume",
         ]);
 
-        assert_eq!(args.prompt.as_ref().expect("a prompt was given").to_string(), "--go");
+        assert_eq!(args.msg.as_ref().expect("a prompt was given").to_string(), "--go");
         assert_eq!(args.placement, Placement::Tab);
         assert_eq!(args.agent_args, ["--resume"]);
     }
@@ -840,7 +843,7 @@ mod tests {
     #[test]
     fn a_first_prompt_addresses_its_reply_at_the_sender_by_default() {
         assert_eq!(
-            parse(&["spawn", "worker", "--prompt", "audit the CLI"]).reply(),
+            parse(&["spawn", "worker", "--msg", "audit the CLI"]).reply(),
             Reply::ToSender
         );
     }
@@ -848,15 +851,7 @@ mod tests {
     #[test]
     fn a_fan_out_can_route_every_workers_report_at_one_collector() {
         assert_eq!(
-            parse(&[
-                "spawn",
-                "worker",
-                "--prompt",
-                "audit the CLI",
-                "--reply-to",
-                "collector"
-            ])
-            .reply(),
+            parse(&["spawn", "worker", "--msg", "audit the CLI", "--reply-to", "collector"]).reply(),
             Reply::To("collector".to_owned())
         );
     }
@@ -864,18 +859,18 @@ mod tests {
     #[test]
     fn a_first_prompt_can_close_the_loop_like_any_other() {
         assert_eq!(
-            parse(&["spawn", "worker", "--prompt", "fyi", "--no-reply"]).reply(),
+            parse(&["spawn", "worker", "--msg", "fyi", "--no-reply"]).reply(),
             Reply::None
         );
     }
 
     #[test]
-    fn spawn_refuses_the_two_reply_flags_together_the_same_way_prompt_does() {
+    fn spawn_refuses_the_two_reply_flags_together_the_same_way_msg_does() {
         assert!(
             Harness::try_parse_from([
                 "spawn",
                 "worker",
-                "--prompt",
+                "--msg",
                 "go",
                 "--no-reply",
                 "--reply-to",

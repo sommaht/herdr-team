@@ -46,7 +46,7 @@ Lightweight sub-headers are earned, not automatic.
   and answers `agent_not_found` or `agent_target_ambiguous` itself. A context type would earn
   its keep only by holding a read every command answers from, and there is none — the
   environment lookups are two `env::var` calls. Loading anything eagerly would also be wrong:
-  a malformed config would then break `prompt`, which never reads one.
+  a malformed config would then break `msg`, which never reads one.
 - **`herdr`** — every interaction with herdr, and the seam that runs them. The module root
   carries `run`, `HerdrError`, and the stream discipline both depend on; `herdr::surface` owns
   the three ways to make a pane, and `herdr::agent` owns what a command does to an agent in
@@ -59,16 +59,16 @@ Lightweight sub-headers are earned, not automatic.
   read. The only disk I/O in the crate, which is the boundary it names. It is also where an
   agent's `prompt_file` is read, since the file a config points at is part of the config.
 - **`cmd`** — the subcommands, their side-effect ordering, and the exit-status contract. There
-  is deliberately no parent grouping: three sibling commands share no distinction a parent
+  is deliberately no parent grouping: these sibling commands share no distinction a parent
   would mark.
-- **`main`** — parses and dispatches. No command logic. `cli` is not a module of its own: with
-  three commands the dispatch match is a handful of lines, and a file holding only module
+- **`main`** — parses and dispatches. No command logic. `cli` is not a module of its own: at five
+  commands the dispatch match is a handful of lines, and a file holding only module
   declarations plus that match names no boundary. What it does own beyond dispatch is the
   **argument failure** — clap's rejection restated in this crate's own words, so it renders
   through the sink like every other failure and repeats nothing the caller typed.
 
 There is **no prelude**. It earns its keep when a dozen command modules share one import set;
-three modules state their own imports (**RS-050**).
+this few state their own imports (**RS-050**).
 
 The clap derives and the `Cmd` impl live on the same `*Args` struct: the parser shape and the
 command are deliberately one type. The boundary that matters is value-level — `#[arg]` fields
@@ -157,7 +157,7 @@ someone's half-written message. Neither may reach an error message, a diagnostic
 The guard's refusal says the composer holds unsent text and never says what that text is.
 
 **The parser is inside the rule, not outside it.** clap repeats the offending value in its own
-rejection, and for `prompt` and `spawn --prompt` that value is the prompt — so `main` parses
+rejection, and for `msg` and `spawn --msg` that value is the prompt — so `main` parses
 with `try_parse` and rebuilds the rejection from clap's structured context. The rebuild is an
 **allowlist**: a string reaches the message only if it is a spelling this build declares, taken
 from `Cli::command()` itself. Filtering the caller's tokens instead would be a guess about what
