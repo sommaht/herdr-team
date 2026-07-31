@@ -1,0 +1,74 @@
+# A worked config. Copy it to $XDG_CONFIG_HOME/herdr-team/config.toml, or to
+# ~/.config/herdr-team/config.toml, and edit.
+#
+# None of this is required: `spawn <name> --kind claude` starts an agent with no
+# config at all. A config buys names for sets of flags, a default, and briefs.
+#
+# The agent name is the table key, so a duplicate name is inexpressible. `args` is
+# an array only: herdr takes an agent's arguments as an argument vector, so nothing
+# here needs shell quoting.
+#
+# `base` carries the shared flags. A child overrides every scalar it states and
+# appends to `args`, since agent CLIs are last-flag-wins and a child adding one
+# flag should not have to restate the rest.
+
+# The agent a bare `spawn` starts.
+default = 'sol'
+
+# ---- codex ------------------------------------------------------------------
+
+# The base, and usable on its own: it inherits model and effort from codex's own
+# config. `--no-alt-screen` is not decoration. Rows that scroll off the alternate
+# screen never enter herdr's scrollback, so a message long enough to push its own
+# opening tag out of view cannot be proven delivered.
+[agents.codex]
+kind = 'codex'
+args = ['--no-alt-screen']
+
+[agents.sol]
+base = 'codex'
+model = 'gpt-5.6-sol'
+effort = 'xhigh'
+
+[agents.terra]
+base = 'codex'
+model = 'gpt-5.6-terra'
+effort = 'high'
+
+# ---- claude -----------------------------------------------------------------
+
+# `--disallowed-tools AskUserQuestion` is a policy choice, and worth understanding
+# before copying: an agent spawned by another agent has nobody at its keyboard, so
+# a question it asks blocks it, and `kill` then refuses it as blocked. Taking the
+# ask away trades that for an agent that decides for itself. Leave it off if you
+# would rather find the question waiting for you.
+[agents.claude]
+kind = 'claude'
+args = ['--disallowed-tools', 'AskUserQuestion']
+
+[agents.opus]
+base = 'claude'
+model = 'opus'
+effort = 'xhigh'
+
+[agents.sonnet]
+base = 'claude'
+model = 'sonnet'
+effort = 'high'
+
+# Deliberately not based on `claude`: `args` appends down a base chain and there is
+# no way to subtract a flag, so an agent that must be able to ask starts its own
+# chain rather than inheriting the flag that forbids it.
+[agents.ask]
+kind = 'claude'
+
+# ---- a brief ----------------------------------------------------------------
+
+# `prompt_file` is prepended to this agent's first message, resolved relative to
+# the directory of the config file that declared it. It is delivered raw, ahead of
+# the mail envelope: a brief is config rather than something a sender wrote, so
+# nothing claims authorship of it.
+#
+# [agents.reviewer]
+# base = 'opus'
+# prompt_file = 'review.md'

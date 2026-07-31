@@ -46,7 +46,8 @@ Lightweight sub-headers are earned, not automatic.
   and answers `agent_not_found` or `agent_target_ambiguous` itself. A context type would earn
   its keep only by holding a read every command answers from, and there is none — the
   environment lookups are two `env::var` calls. Loading anything eagerly would also be wrong:
-  a malformed config would then break `msg`, which never reads one.
+  a malformed config would then break `msg`, which never reads one — and `spawn --kind`, which
+  deliberately reads none either.
 - **`herdr`** — every interaction with herdr, and the seam that runs them. The module root
   carries `run`, `HerdrError`, and the stream discipline both depend on; `herdr::surface` owns
   the three ways to make a pane, and `herdr::agent` owns what a command does to an agent in
