@@ -48,11 +48,11 @@ const DEFAULT_SETTLE_MS: u64 = 10_000;
 /// starts the agent there.
 #[derive(Debug, Args)]
 #[command(after_help = "Examples:\n  \
-    herdr-agent-tools spawn reviewer --placement tab --agent opus\n  \
-    herdr-agent-tools spawn fixer --agent sonnet --prompt \"Fix the flaky tests\"\n  \
-    git diff | herdr-agent-tools spawn reviewer --prompt -\n  \
-    herdr-agent-tools spawn big --placement workspace --agent fable -- --resume\n  \
-    herdr-agent-tools spawn fixer --placement worktree --branch worktree/flake-fix")]
+    herdr-team spawn reviewer --placement tab --agent opus\n  \
+    herdr-team spawn fixer --agent sonnet --prompt \"Fix the flaky tests\"\n  \
+    git diff | herdr-team spawn reviewer --prompt -\n  \
+    herdr-team spawn big --placement workspace --agent fable -- --resume\n  \
+    herdr-team spawn fixer --placement worktree --branch worktree/flake-fix")]
 pub struct SpawnArgs {
     /// The agent's name; must satisfy herdr's rule, which is checked before anything is created.
     name: AgentName,

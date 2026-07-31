@@ -1,4 +1,4 @@
-//! `herdr-agent-tools` — launch and prompt herdr agents from one command.
+//! `herdr-team` — launch and prompt herdr agents from one command.
 //!
 //! Parses and dispatches; no command logic lives here. There is no `cli` module: even at five
 //! commands the dispatch match is a handful of lines, and a file holding only module declarations
@@ -28,7 +28,7 @@ use crate::core::{OutputMode, Sink};
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "herdr-agent-tools",
+    name = "herdr-team",
     version,
     about = "Launch and prompt herdr agents from one command",
     long_about = "Launch and prompt herdr agents from one command.\n\
@@ -39,7 +39,7 @@ use crate::core::{OutputMode, Sink};
         `prompt` delivers text to an agent that already exists, `kill` closes an agent's pane \
         unless it is mid-task, and `agents` lists what the config holds.\n\
         \n\
-        Run `herdr-agent-tools <command> --help` for details and examples.",
+        Run `herdr-team <command> --help` for details and examples.",
     after_help = "Exit codes:\n  \
         0  success\n  \
         1  general failure\n  \
@@ -222,8 +222,8 @@ fn describe(error: &clap::Error, arguments: &[String]) -> String {
     };
 
     match subcommand_named(arguments) {
-        Some(command) => format!("{detail}; run `herdr-agent-tools {command} --help`"),
-        None => format!("{detail}; run `herdr-agent-tools --help`"),
+        Some(command) => format!("{detail}; run `herdr-team {command} --help`"),
+        None => format!("{detail}; run `herdr-team --help`"),
     }
 }
 
@@ -358,11 +358,11 @@ mod tests {
         let secret = "wait, before you commit, the staging password is hunter2";
 
         for words in [
-            argv(&["herdr-agent-tools", "prompt", "reviewer", secret, "extra"]),
-            argv(&["herdr-agent-tools", "prompt", secret]),
-            argv(&["herdr-agent-tools", "spawn", "reviewer", "--prompt"]),
-            argv(&["herdr-agent-tools", "spawn", "reviewer", "--prompt", secret, "extra"]),
-            argv(&["herdr-agent-tools", "prompt", "reviewer", "--wait-until", secret]),
+            argv(&["herdr-team", "prompt", "reviewer", secret, "extra"]),
+            argv(&["herdr-team", "prompt", secret]),
+            argv(&["herdr-team", "spawn", "reviewer", "--prompt"]),
+            argv(&["herdr-team", "spawn", "reviewer", "--prompt", secret, "extra"]),
+            argv(&["herdr-team", "prompt", "reviewer", "--wait-until", secret]),
         ] {
             let borrowed: Vec<&str> = words.iter().map(String::as_str).collect();
             let error = Cli::try_parse_from(&borrowed).expect_err("this argv is rejected");
@@ -380,7 +380,7 @@ mod tests {
     /// on its shape.
     #[test]
     fn a_stray_positional_is_reported_without_being_named() {
-        let rendered = rejection(&["herdr-agent-tools", "kill", "reviewer", "extra"]);
+        let rendered = rejection(&["herdr-team", "kill", "reviewer", "extra"]);
 
         assert!(!rendered.contains("extra"), "{rendered}");
         assert!(rendered.contains("unrecognized argument"), "{rendered}");
@@ -389,8 +389,8 @@ mod tests {
     #[test]
     fn a_missing_argument_names_the_argument_and_the_help_that_describes_it() {
         assert_eq!(
-            rejection(&["herdr-agent-tools", "prompt", "reviewer"]),
-            "missing a required argument <TEXT>; run `herdr-agent-tools prompt --help`"
+            rejection(&["herdr-team", "prompt", "reviewer"]),
+            "missing a required argument <TEXT>; run `herdr-team prompt --help`"
         );
     }
 
@@ -398,7 +398,7 @@ mod tests {
     fn a_value_the_argument_does_not_accept_is_answered_with_the_ones_it_does() {
         // The valid list is the useful half and it is all this build's own vocabulary; the value
         // that was rejected is the caller's and stays out.
-        let rendered = rejection(&["herdr-agent-tools", "spawn", "reviewer", "--placement", "tba"]);
+        let rendered = rejection(&["herdr-team", "spawn", "reviewer", "--placement", "tba"]);
 
         assert!(!rendered.contains("tba"), "{rendered}");
         for placement in ["pane", "tab", "workspace", "worktree"] {
@@ -410,7 +410,7 @@ mod tests {
     /// it states is herdr's, and a caller that cannot see it has to guess at the name it may use.
     #[test]
     fn a_rule_this_build_enforces_is_quoted_because_it_is_this_build_speaking() {
-        let rendered = rejection(&["herdr-agent-tools", "spawn", "Reviewer"]);
+        let rendered = rejection(&["herdr-team", "spawn", "Reviewer"]);
 
         assert!(rendered.contains("lowercase"), "{rendered}");
         assert!(!rendered.contains("Reviewer"), "{rendered}");
@@ -418,7 +418,7 @@ mod tests {
 
     #[test]
     fn a_mistyped_flag_is_answered_with_the_flag_it_resembles() {
-        let rendered = rejection(&["herdr-agent-tools", "spawn", "reviewer", "--placemnt", "tab"]);
+        let rendered = rejection(&["herdr-team", "spawn", "reviewer", "--placemnt", "tab"]);
 
         assert!(rendered.contains("--placement"), "{rendered}");
     }
@@ -426,17 +426,17 @@ mod tests {
     #[test]
     fn an_unknown_command_is_reported_against_the_top_level_help() {
         assert_eq!(
-            rejection(&["herdr-agent-tools", "sprawn"]),
-            "no such command; run `herdr-agent-tools --help`"
+            rejection(&["herdr-team", "sprawn"]),
+            "no such command; run `herdr-team --help`"
         );
     }
 
     /// The mode a rejection renders in has to be recovered from argv, since nothing parsed.
     #[test]
     fn the_json_flag_is_recovered_from_argv_wherever_it_sits() {
-        assert!(json_requested(argv(&["herdr-agent-tools", "--json", "agents"])));
-        assert!(json_requested(argv(&["herdr-agent-tools", "agents", "--json"])));
-        assert!(!json_requested(argv(&["herdr-agent-tools", "agents"])));
+        assert!(json_requested(argv(&["herdr-team", "--json", "agents"])));
+        assert!(json_requested(argv(&["herdr-team", "agents", "--json"])));
+        assert!(!json_requested(argv(&["herdr-team", "agents"])));
     }
 
     /// Neither of the two places `--json` may appear as data is read as the flag.
@@ -444,14 +444,14 @@ mod tests {
     fn a_json_that_is_data_rather_than_a_flag_does_not_switch_the_mode() {
         // A prompt may spell anything, and everything past `--` is the agent's.
         assert!(!json_requested(argv(&[
-            "herdr-agent-tools",
+            "herdr-team",
             "spawn",
             "worker",
             "--prompt",
             "--json"
         ])));
         assert!(!json_requested(argv(&[
-            "herdr-agent-tools",
+            "herdr-team",
             "spawn",
             "worker",
             "--",
@@ -462,7 +462,7 @@ mod tests {
     #[test]
     fn help_and_version_are_answers_rather_than_failures() {
         for flag in ["--help", "--version"] {
-            let error = Cli::try_parse_from(["herdr-agent-tools", flag]).expect_err("clap stops parsing");
+            let error = Cli::try_parse_from(["herdr-team", flag]).expect_err("clap stops parsing");
 
             assert!(
                 matches!(error.kind(), ErrorKind::DisplayHelp | ErrorKind::DisplayVersion),

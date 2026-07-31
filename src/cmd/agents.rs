@@ -21,8 +21,8 @@ use crate::core::Sink;
 /// listing and warned about above it, so this is also where a broken config announces itself.
 #[derive(Debug, Args)]
 #[command(after_help = "Examples:\n  \
-    herdr-agent-tools agents\n  \
-    herdr-agent-tools agents --config ./config.toml --json")]
+    herdr-team agents\n  \
+    herdr-team agents --config ./config.toml --json")]
 pub struct AgentsArgs {
     /// Read this config file instead of the one in the config directory.
     ///
@@ -186,8 +186,8 @@ mod tests {
                         "--effort".to_owned(),
                         "xhigh".to_owned(),
                     ],
-                    prompt_file: Some("/repo/.herdr-agent-tools/review.md".to_owned()),
-                    source: "/repo/.herdr-agent-tools/config.toml".to_owned(),
+                    prompt_file: Some("/repo/.herdr-team/review.md".to_owned()),
+                    source: "/repo/.herdr-team/config.toml".to_owned(),
                     default: true,
                 },
             ],
@@ -207,7 +207,7 @@ mod tests {
     /// The human line carries the brief's name; the whole path is the wire form's job.
     #[test]
     fn a_brief_is_named_rather_than_pathed_on_the_line_a_person_reads() {
-        assert_eq!(named("/repo/.herdr-agent-tools/review.md"), Some("review.md"));
+        assert_eq!(named("/repo/.herdr-team/review.md"), Some("review.md"));
         assert_eq!(named("review.md"), Some("review.md"));
     }
 
@@ -215,7 +215,7 @@ mod tests {
     fn the_wire_listing_names_the_default_once_and_marks_it_on_the_agent() {
         assert_eq!(
             serde_json::to_string(&listing()).unwrap(),
-            r#"{"default":"reviewer","agents":[{"name":"cheap","kind":"codex","model":"gpt-5-low","args":["--no-alt-screen","--model","gpt-5-low"],"source":"/config/config.toml","default":false},{"name":"reviewer","kind":"claude","model":"opus","effort":"xhigh","args":["--model","opus","--effort","xhigh"],"prompt_file":"/repo/.herdr-agent-tools/review.md","source":"/repo/.herdr-agent-tools/config.toml","default":true}]}"#
+            r#"{"default":"reviewer","agents":[{"name":"cheap","kind":"codex","model":"gpt-5-low","args":["--no-alt-screen","--model","gpt-5-low"],"source":"/config/config.toml","default":false},{"name":"reviewer","kind":"claude","model":"opus","effort":"xhigh","args":["--model","opus","--effort","xhigh"],"prompt_file":"/repo/.herdr-team/review.md","source":"/repo/.herdr-team/config.toml","default":true}]}"#
         );
     }
 }

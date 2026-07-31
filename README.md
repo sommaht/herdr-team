@@ -1,4 +1,4 @@
-# herdr-agent-tools
+# herdr-team
 
 Launching a [herdr](https://herdr.dev) agent by hand is two steps: herdr starts an agent only in a
 pane that already exists and is sitting at an interactive shell prompt, so you create a surface,
@@ -22,10 +22,10 @@ rather than a flag change. It makes no herdr call and a config it cannot read co
 and nothing else, because a hook that fails is worse than one that says little.
 
 ```
-herdr-agent-tools spawn reviewer --placement tab --agent opus --prompt "Review the branch"
-git diff | herdr-agent-tools prompt reviewer -
-herdr-agent-tools kill reviewer
-herdr-agent-tools agents
+herdr-team spawn reviewer --placement tab --agent opus --prompt "Review the branch"
+git diff | herdr-team prompt reviewer -
+herdr-team kill reviewer
+herdr-team agents
 ```
 
 `prompt` and `kill` each refuse one thing by default, and `--force` is the override for both: a
@@ -35,9 +35,9 @@ person typing into it — so the retry belongs after the named state changes, no
 
 ## Agents
 
-`$XDG_CONFIG_HOME/herdr-agent-tools/config.toml`, falling back to
-`~/.config/herdr-agent-tools/config.toml`. Override the location with `--config` or with
-`HERDR_AGENT_TOOLS_CONFIG`.
+`$XDG_CONFIG_HOME/herdr-team/config.toml`, falling back to
+`~/.config/herdr-team/config.toml`. Override the location with `--config` or with
+`HERDR_TEAM_CONFIG`.
 
 Agents are what the file holds today, and the filename deliberately does not say so: a name
 that names one table has to change the first time a second one is added.
@@ -84,7 +84,7 @@ or blank is a refusal, raised before anything is created.
 ## The repository layer
 
 A repository may carry its own config, found by walking up from the directory a spawn is run in.
-Either `.herdr-agent-tools/config.toml` or `.herdr-agent-tools.config.toml` — the directory when an
+Either `.herdr-team/config.toml` or `.herdr-team.config.toml` — the directory when an
 agent's `prompt_file` wants somewhere to live beside the config that names it, the flat file when
 one file is the whole config. Both are tried at each directory on the way up, so the nearer one
 wins whichever form it takes, and the directory wins a tie between the two in one place.
@@ -113,7 +113,7 @@ One run may print warnings before its result, so a pipeline selects rather than 
 line:
 
 ```
-herdr-agent-tools --json spawn worker --placement tab \
+herdr-team --json spawn worker --placement tab \
   | jq -er 'select(.type == "result") | .agent.pane_id'
 ```
 

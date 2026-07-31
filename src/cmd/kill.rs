@@ -37,8 +37,8 @@ const SETTLED: [&str; 2] = ["idle", "done"];
 /// and the caller here is usually another agent, acting on a status it may have read wrong.
 #[derive(Debug, Args)]
 #[command(after_help = "Examples:\n  \
-    herdr-agent-tools kill reviewer\n  \
-    herdr-agent-tools kill w4:p17 --force")]
+    herdr-team kill reviewer\n  \
+    herdr-team kill w4:p17 --force")]
 pub struct KillArgs {
     /// The agent to close: a herdr pane id, or a unique agent name.
     target: String,

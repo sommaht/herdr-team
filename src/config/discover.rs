@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 /// This tool's own directory, not a second file inside herdr's: a public tool should not squat a
 /// filename in another project's config directory, where it would break the day that project claims
 /// the name.
-const RELATIVE_PATH: &str = "herdr-agent-tools/config.toml";
+const RELATIVE_PATH: &str = "herdr-team/config.toml";
 
 /// Where a repository carries its own, relative to any directory in it, in the order they are tried.
 ///
@@ -27,7 +27,7 @@ const RELATIVE_PATH: &str = "herdr-agent-tools/config.toml";
 ///
 /// Order settles a tie inside one directory and nothing else. Which form is *nearer* is what decides
 /// across directories, and [`repository`] tries both at each ancestor to keep it that way.
-const REPOSITORY_PATHS: [&str; 2] = [".herdr-agent-tools/config.toml", ".herdr-agent-tools.config.toml"];
+const REPOSITORY_PATHS: [&str; 2] = [".herdr-team/config.toml", ".herdr-team.config.toml"];
 
 // =====================================================================================================================
 // The User Layer
@@ -148,13 +148,11 @@ mod tests {
         );
         assert_eq!(
             user(None, None, Some("/xdg".as_ref()), Some("/home".as_ref())),
-            Some(UserPath::Default(PathBuf::from("/xdg/herdr-agent-tools/config.toml")))
+            Some(UserPath::Default(PathBuf::from("/xdg/herdr-team/config.toml")))
         );
         assert_eq!(
             user(None, None, None, Some("/home".as_ref())),
-            Some(UserPath::Default(PathBuf::from(
-                "/home/.config/herdr-agent-tools/config.toml"
-            )))
+            Some(UserPath::Default(PathBuf::from("/home/.config/herdr-team/config.toml")))
         );
         assert_eq!(user(None, None, None, None), None);
     }
@@ -186,8 +184,8 @@ mod tests {
     #[test]
     fn the_nearest_one_wins_over_an_ancestors() {
         let root = tempfile::tempdir().unwrap();
-        let outer = root.path().join(".herdr-agent-tools/config.toml");
-        let inner = root.path().join("nested/.herdr-agent-tools/config.toml");
+        let outer = root.path().join(".herdr-team/config.toml");
+        let inner = root.path().join("nested/.herdr-team/config.toml");
         for path in [&outer, &inner] {
             write_config(path);
         }
@@ -200,9 +198,9 @@ mod tests {
     #[test]
     fn the_directory_form_wins_over_a_flat_file_in_the_same_directory() {
         let root = tempfile::tempdir().unwrap();
-        let directory_form = root.path().join(".herdr-agent-tools/config.toml");
+        let directory_form = root.path().join(".herdr-team/config.toml");
         write_config(&directory_form);
-        write_config(&root.path().join(".herdr-agent-tools.config.toml"));
+        write_config(&root.path().join(".herdr-team.config.toml"));
 
         assert_eq!(repository(root.path()), Some(directory_form));
     }
@@ -212,9 +210,9 @@ mod tests {
     #[test]
     fn a_nearer_flat_file_beats_a_directory_form_further_up() {
         let root = tempfile::tempdir().unwrap();
-        write_config(&root.path().join(".herdr-agent-tools/config.toml"));
+        write_config(&root.path().join(".herdr-team/config.toml"));
         let nested = root.path().join("nested");
-        let flat_form = nested.join(".herdr-agent-tools.config.toml");
+        let flat_form = nested.join(".herdr-team.config.toml");
         write_config(&flat_form);
 
         assert_eq!(repository(&nested), Some(flat_form));

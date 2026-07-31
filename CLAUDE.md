@@ -14,7 +14,7 @@
    report that rehearsal separately from the static checks. Automated tests never invoke herdr.
 
 5) **`cargo install --path . --force` is the last step of the verification suite**, whenever a
-   change touched the binary. `herdr-agent-tools` on `PATH` resolves to `~/.cargo/bin`, never to
+   change touched the binary. `herdr-team` on `PATH` resolves to `~/.cargo/bin`, never to
    `target/`, so a green `cargo test` says nothing about the command the user is about to type.
    Exercise the changed surface through the installed binary afterwards — a stale `--help` string
    passes every test in the crate.

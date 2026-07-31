@@ -63,10 +63,10 @@ const DELIVERY_INTERVAL_MS: u64 = 250;
 /// `agent_not_found` or `agent_target_ambiguous` itself.
 #[derive(Debug, Args)]
 #[command(after_help = "Examples:\n  \
-    herdr-agent-tools prompt reviewer \"run the test suite and report failures\"\n  \
-    git diff | herdr-agent-tools prompt reviewer -\n  \
-    herdr-agent-tools prompt dispatcher --no-reply \"done: 4 flags are undocumented\"\n  \
-    herdr-agent-tools prompt w4:p17 \"go\" --wait-until idle --timeout 120000")]
+    herdr-team prompt reviewer \"run the test suite and report failures\"\n  \
+    git diff | herdr-team prompt reviewer -\n  \
+    herdr-team prompt dispatcher --no-reply \"done: 4 flags are undocumented\"\n  \
+    herdr-team prompt w4:p17 \"go\" --wait-until idle --timeout 120000")]
 pub struct PromptArgs {
     /// The agent to prompt: a herdr pane id, or a unique agent name.
     target: String,

@@ -46,16 +46,16 @@ use crate::harness::{self, AgentHarness};
 /// Subject to a line budget enforced by a test, since this is context an agent carries for a whole
 /// session and nothing else pushes back on it growing.
 const GUIDANCE: &str = "\
-# herdr-agent-tools
+# herdr-team
 
 Launch and prompt herdr agents. herdr starts an agent only in a pane that already exists and is
 sitting at a shell prompt, so `spawn` creates the surface and starts the agent in one step.
 
-> Context recovery: run `herdr-agent-tools prime` again after a compaction or in a new session.
+> Context recovery: run `herdr-team prime` again after a compaction or in a new session.
 
 A <target> is a unique agent name or a herdr pane id, resolved by herdr. Your own pane, tab, and
 workspace ids come from `herdr pane current`. Every command below is run through
-`herdr-agent-tools`, prints one terse line, and takes `--json` for when a pipeline has to parse
+`herdr-team`, prints one terse line, and takes `--json` for when a pipeline has to parse
 the output rather than you reading it. `prime` is the one exception: its brief is a document, so
 `--json` prints this same text. Do not pipe it to a JSON parser.
 
@@ -92,7 +92,7 @@ Every prompt you send is wrapped before it lands, and every prompt you receive a
     audit the CLI surface and list what is undocumented
     </mail>
     <how-to-reply>
-    herdr-agent-tools prompt w4:p3 --no-reply - <<'EOF'
+    herdr-team prompt w4:p3 --no-reply - <<'EOF'
     {{your reply}}
     EOF
     </how-to-reply>
@@ -140,20 +140,20 @@ state the message names rather than retrying on a loop. `--force` overrides eith
 
 Launch a reviewer in its own tab and hand it the diff:
 
-    git diff | herdr-agent-tools spawn reviewer --placement tab --prompt -
+    git diff | herdr-team spawn reviewer --placement tab --prompt -
 
 Dispatch work and block until there is a result to read. No reply is invited, because you are
 already watching — where the fan-out below invites one instead and does not wait at all:
 
-    herdr-agent-tools prompt reviewer \"run the tests\" --no-reply --wait-until idle
+    herdr-team prompt reviewer \"run the tests\" --no-reply --wait-until idle
 
 Fan out, then clean up when one is done:
 
     for area in api web cli; do
-      herdr-agent-tools spawn \"$area\" --placement tab \\
+      herdr-team spawn \"$area\" --placement tab \\
         --prompt \"audit the $area surface\" --reply-to \"$HERDR_PANE_ID\"
     done
-    herdr-agent-tools kill api
+    herdr-team kill api
 
 Work you are not waiting on is work you will not hear about if it dies. `herdr agent wait
 <target>` blocks until one stops working — one call, rather than a polling loop of your own.
@@ -161,7 +161,7 @@ Work you are not waiting on is work you will not hear about if it dies. `herdr a
 Collect pane ids for a script rather than for reading. One run may print warning lines before
 its result, so select the result instead of taking the first line:
 
-    herdr-agent-tools --json spawn worker --placement tab \\
+    herdr-team --json spawn worker --placement tab \\
       | jq -er 'select(.type == \"result\") | .agent.pane_id'";
 
 // =====================================================================================================================
@@ -179,8 +179,8 @@ its result, so select the result instead of taking the first line:
 /// before a parser does.
 #[derive(Debug, Args)]
 #[command(after_help = "Examples:\n  \
-    herdr-agent-tools prime\n  \
-    herdr-agent-tools prime --config ./config.toml\n\
+    herdr-team prime\n  \
+    herdr-team prime --config ./config.toml\n\
     \n\
     --json prints this same text: the brief is a document, not a record.")]
 pub struct PrimeArgs {
@@ -270,7 +270,7 @@ pub struct Brief {
 /// Costs one line against an agent silently acting on half a brief. Cheap here in a way it is not for
 /// tools that persist hook output elsewhere: re-running this command is the whole recovery.
 const TRUNCATION_NOTE: &str =
-    "[herdr-agent-tools prime] If your host truncated this, run `herdr-agent-tools prime` to read it in full.";
+    "[herdr-team prime] If your host truncated this, run `herdr-team prime` to read it in full.";
 
 impl Display for Brief {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -402,7 +402,7 @@ mod tests {
         // The reverse: every full invocation in the brief names a command that exists. Splitting on
         // the binary plus a space deliberately misses the title line, which has no space after it.
         // Leading tokens that start with a dash are skipped, since `--json` can precede the command.
-        for tail in GUIDANCE.split("herdr-agent-tools ").skip(1) {
+        for tail in GUIDANCE.split("herdr-team ").skip(1) {
             let Some(candidate) = tail
                 .split_whitespace()
                 .find(|token| !token.starts_with('-'))
@@ -412,7 +412,7 @@ mod tests {
             };
             assert!(
                 commands.iter().any(|command| command == candidate),
-                "the brief invokes `herdr-agent-tools {candidate}`, which is not a command"
+                "the brief invokes `herdr-team {candidate}`, which is not a command"
             );
         }
     }
