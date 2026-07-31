@@ -17,12 +17,12 @@ use clap_stdin::MaybeStdin;
 use serde::Serialize;
 use thiserror::Error;
 
-use crate::cmd::prompt::deliver;
 use crate::cmd::prompt::envelope::{OPERATOR, Reply};
+use crate::cmd::prompt::{Proof, deliver};
 use crate::cmd::{AsExitStatus, Cmd, ExitStatus};
 use crate::config::{Config, ConfigError};
 use crate::core::{AgentName, Backoff, NonEmptyText, PaneId, Sink};
-use crate::herdr::agent::{self, AgentRecord, WORKING, Wait};
+use crate::herdr::agent::{self, AgentRecord};
 use crate::herdr::surface::{self, Checkout, Focus, Placement};
 use crate::herdr::{HerdrError, HerdrRef, PANE_VARIABLE};
 
@@ -379,29 +379,28 @@ impl SpawnArgs {
 
         // No composer guard here: no human has touched the pane this just created, and the
         // submission follows `agent start` immediately.
-        let wait = Wait {
-            until: vec![WORKING.to_owned()],
-            timeout: DEFAULT_SETTLE_MS,
-        };
+        //
+        // `prompt`'s problem is met here too, and by the same rule: an agent that came up working
+        // has no state change left for herdr to match, so its pane is read for the message instead.
+        let proof = Proof::for_delivery(started.status(), DEFAULT_SETTLE_MS);
+        let submission = deliver(pane, &text, &self.reply(), &proof, sink)?;
 
-        // `prompt`'s honest gap, met here too: an agent that is already `working` matches
-        // `--until working` instantly, which proves nothing. Said out loud rather than left to the
-        // `delivered` field, which only the `--json` reader sees — a caller reading the one line
-        // would otherwise wait forever on work that was never proven to start.
-        let verified = started.status() != WORKING;
-        if !verified {
+        // Said out loud rather than left to the `delivered` field, which only the `--json` reader
+        // sees — a caller reading the one line would otherwise wait forever on work that was never
+        // proven to start.
+        if !submission.proven {
             sink.warn(&format!(
-                "{} was already working when its first prompt was sent, so delivery could not be verified",
+                "{} was already working when its first prompt was sent, and its pane never showed \
+                 the message, so delivery is unproven",
                 self.name
             ));
         }
 
-        let agent = deliver(pane, &text, &self.reply(), Some(&wait), sink)?;
         Ok(Spawned {
             placement: self.placement,
-            delivered: Some(verified),
+            delivered: Some(submission.proven),
             worktree,
-            agent,
+            agent: submission.agent,
         })
     }
 

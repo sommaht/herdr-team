@@ -66,7 +66,7 @@ pub fn prompt(target: &str, text: &NonEmptyText, wait: Option<&Wait>) -> Result<
 }
 
 /// The delivery wait attached to a submission.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Wait {
     /// The states that count as delivered. Each becomes one `--until`.
     pub until: Vec<String>,
