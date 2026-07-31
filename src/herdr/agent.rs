@@ -185,8 +185,8 @@ fn read_args(target: &str, source: &str, format: &str, lines: u32) -> Vec<String
 
 /// `herdr agent start <NAME> --kind <KIND> --pane <ID> [-- <ARGS…>]`.
 ///
-/// The separator is omitted when there are no agent arguments, so an empty preset produces the same
-/// vector a hand-typed launch would.
+/// The separator is omitted when there are no agent arguments, so an agent declaring none produces
+/// the same vector a hand-typed launch would.
 fn start_args(name: &str, kind: &str, pane: &str, args: &[String]) -> Vec<String> {
     let mut vector = ["agent", "start", name, "--kind", kind, "--pane", pane]
         .map(str::to_owned)
@@ -227,8 +227,8 @@ mod tests {
     const STARTED: &str = r#"{"type":"agent_started","argv":["claude"],"agent":{"agent":"claude","agent_status":"working","pane_id":"w4:p17","name":"reviewer","tab_id":"w4:t3","workspace_id":"w4","terminal_id":"term_1","cwd":"/work","focused":false,"revision":7}}"#;
 
     #[test]
-    fn a_start_names_the_kind_and_the_pane_and_puts_preset_args_after_the_separator() {
-        // Extra args are appended after the preset's with no merging and no de-duplication, so the
+    fn a_start_names_the_kind_and_the_pane_and_puts_agent_args_after_the_separator() {
+        // Extra args are appended after the config's with no merging and no de-duplication, so the
         // agent's own last-flag-wins rules settle any conflict.
         assert_eq!(
             start_args(

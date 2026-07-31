@@ -266,15 +266,22 @@ awk -F'\t' -v min="$MIN_DUP_BODY_LINES" '
         } else { seen[key] = $2 ":" $3; names[key] = $4 }
     }' "$TMP/fns" >> "$TMP/findings"
 
-# RS-030: top-level fn whose first param is a crate type that has an impl block.
-# Owning types = declared structs/enums that also appear in an impl header.
+# RS-030: top-level fn whose first param is a crate type that has an inherent impl block.
+# Owning types = declared structs/enums that also carry an `impl Type {` block.
+#
+# Inherent blocks only, never `impl Trait for Type`. The smell RS-030 names is a type whose
+# operations are *already* methods acquiring a free function beside them — so the evidence it
+# needs is that someone chose methods as that type's interface. A type with only trait impls has
+# no method surface to be inconsistent with, and newtypes whose whole interface is
+# FromStr/Display/Deref are the common case: calling every function that takes one first a
+# misplacement flags ordinary code, and the fix it proposes would move the function onto a type
+# that has no business knowing about it.
 {
     while read -r file; do
         sed -nE 's/^[[:space:]]*(pub([(][^)]*[)])? )?(struct|enum) ([A-Za-z0-9_]+).*/\4/p' "$file"
     done < "$TMP/files" | sort -u > "$TMP/decls"
     while read -r file; do
-        sed -nE 's/^impl(<[^>]*>)? +[A-Za-z0-9_:<>]+ +for +([A-Za-z0-9_]+).*/\2/p
-                 s/^impl(<[^>]*>)? +([A-Za-z0-9_]+)[ <{].*/\2/p' "$file"
+        sed -nE 's/^impl(<[^>]*>)? +([A-Za-z0-9_]+)( *<[^>]*>)? *\{.*/\2/p' "$file"
     done < "$TMP/files" | sort -u > "$TMP/impls"
     comm -12 "$TMP/decls" "$TMP/impls" > "$TMP/owners"
 }

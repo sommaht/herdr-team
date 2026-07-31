@@ -139,9 +139,17 @@ is in [string-newtypes.md](string-newtypes.md).
 ## Placement
 
 **RS-030 (script) — Free function with an obvious owner.** A free function whose first
-parameter is a same-crate type that has an `impl` block belongs on that type. A module
-where some operations on a type are methods and others are free functions is the
+parameter is a same-crate type that has an **inherent** `impl` block belongs on that type. A
+module where some operations on a type are methods and others are free functions is the
 canonical smell. Orphan-rule blocked → `*Ext` trait or relocate.
+
+Inherent blocks only — `impl Trait for Type` is not evidence of ownership. The finding needs
+someone to have already chosen methods as that type's interface; a type carrying nothing but
+`FromStr`, `Display`, or `Deref` has no method surface for a free function to be inconsistent
+with. Validated newtypes are the common shape there, and they are routinely passed first to
+functions that belong to another module entirely — a seam call taking an `AgentName` does not
+belong on `AgentName`, and moving it there would hand a leaf type a dependency it exists to
+avoid. Counting trait impls made this rule fire on that shape, which is why it does not.
 
 **RS-031 (script-candidate) — Crowded function.** Long is
 allowed only when it reads as ordered named steps and splitting would hide the
