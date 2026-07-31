@@ -38,8 +38,8 @@ pub fn get(target: &str) -> Result<AgentRecord, HerdrError> {
 /// # Errors
 ///
 /// Returns whatever [`run_text`] returned.
-pub fn read(target: &str, source: &str, lines: u32) -> Result<String, HerdrError> {
-    run_text(&read_args(target, source, lines))
+pub fn read(target: &str, source: &str, format: &str, lines: u32) -> Result<String, HerdrError> {
+    run_text(&read_args(target, source, format, lines))
 }
 
 /// Starts an agent in an existing pane.
@@ -167,13 +167,15 @@ fn get_args(target: &str) -> Vec<String> {
     ["agent", "get", target].map(str::to_owned).to_vec()
 }
 
-/// `herdr agent read <TARGET> --source <SOURCE> --format text --lines <N>`.
+/// `herdr agent read <TARGET> --source <SOURCE> --format <FORMAT> --lines <N>`.
 ///
-/// The source is a parameter rather than a constant here: which rendering of a pane answers a
-/// question is the asker's business, and this seam only spells the call.
-fn read_args(target: &str, source: &str, lines: u32) -> Vec<String> {
+/// The source and the format are parameters rather than constants here: which rendering of a pane
+/// answers a question is the asker's business, and this seam only spells the call. The format
+/// stopped being fixed when the composer guard needed the escape sequences that tell a harness's own
+/// suggestion from an operator's draft.
+fn read_args(target: &str, source: &str, format: &str, lines: u32) -> Vec<String> {
     [
-        "agent", "read", target, "--source", source, "--format", "text", "--lines",
+        "agent", "read", target, "--source", source, "--format", format, "--lines",
     ]
     .map(str::to_owned)
     .into_iter()
@@ -311,7 +313,7 @@ mod tests {
         // `--source detection` is the plain-text bottom-buffer snapshot herdr's own agent detection
         // reads. It is absent from that subcommand's usage line but accepted.
         assert_eq!(
-            read_args("reviewer", "detection", 40),
+            read_args("reviewer", "detection", "text", 40),
             [
                 "agent",
                 "read",

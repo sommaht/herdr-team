@@ -118,8 +118,9 @@ impl Cmd for PromptArgs {
 
         if self.guarded() {
             // The harness decides what it needs to look at; this only performs the read it asks for.
-            let readiness =
-                harness::readiness(before.kind(), |source, lines| agent::read(&self.target, source, lines))?;
+            let readiness = harness::readiness(before.kind(), |source, format, lines| {
+                agent::read(&self.target, source, format, lines)
+            })?;
             match readiness {
                 Composer::Occupied => {
                     return Err(PromptError::ComposerOccupied { target: self.target });
