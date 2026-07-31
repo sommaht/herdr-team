@@ -155,6 +155,9 @@ Fan out, then clean up when one is done:
     done
     herdr-agent-tools kill api
 
+Work you are not waiting on is work you will not hear about if it dies. `herdr agent wait
+<target>` blocks until one stops working — one call, rather than a polling loop of your own.
+
 Collect pane ids for a script rather than for reading. One run may print warning lines before
 its result, so select the result instead of taking the first line:
 
