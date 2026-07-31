@@ -171,7 +171,13 @@ impl Cmd for MsgArgs {
         }
 
         let proof = self.proof(before.status());
-        let submission = deliver(&self.target, &self.text, &self.reply(), &proof, sink)?;
+        // Always mail: this command's argument is what a sender wrote, so it always has an author to
+        // name. Only `spawn` has a brief, and only `spawn` can deliver one alone.
+        let delivery = Delivery::Mail {
+            brief: None,
+            body: (*self.text).clone(),
+        };
+        let submission = deliver(&self.target, &delivery, &self.reply(), &proof, sink)?;
 
         // Said out loud rather than left to the `delivered` field, which only the `--json` reader
         // sees. A caller reading the one line would otherwise treat an unproven dispatch as a
@@ -236,6 +242,68 @@ impl Proof {
             Self::Wait(wait) => Some(wait),
             Self::None | Self::Pane => None,
         }
+    }
+}
+
+/// What one submission puts in the recipient's composer.
+///
+/// Two variants because two different things get delivered and only one of them is mail. A `<mail>`
+/// envelope names who wrote the body and how to answer them; an agent's configured brief has neither
+/// — it comes from a file the recipient's own config points at, so there is no sender to name and
+/// nothing to reply to. Wrapping it anyway would have the envelope claim that whoever ran `spawn`
+/// wrote it, which is the one thing the envelope exists to say truthfully.
+///
+/// An enum rather than two optional fields, so "neither" cannot be constructed: a spawn with nothing
+/// to deliver returns before it gets here.
+pub(super) enum Delivery {
+    /// A sender's own message, wrapped, optionally behind the recipient's brief.
+    ///
+    /// One text rather than two submissions: an agent handed two would answer the first before it
+    /// heard the second. The brief leads, so the message reads as an instruction about it.
+    Mail {
+        /// The agent's brief, delivered raw ahead of the envelope. Absent when it has none.
+        brief: Option<NonEmptyText>,
+        /// What the sender wrote, and the only part an envelope goes around.
+        body: NonEmptyText,
+    },
+    /// A brief with no message behind it, delivered exactly as written.
+    ///
+    /// Costs the pane proof, which searches for an envelope's id and has none to search for here.
+    /// Only against a target that came up already working, though — anything else is proven by the
+    /// state change herdr waits on, which is what a freshly started agent gives.
+    Brief(NonEmptyText),
+}
+
+impl Delivery {
+    /// The text to submit, and the id proving it landed when there is an envelope to carry one.
+    ///
+    /// The `agent get` behind [`Envelope::resolve`] is skipped outright for a brief, which is right
+    /// twice over: there is no sender to resolve, and a spawn that delivers only a brief makes one
+    /// fewer herdr call than it used to.
+    fn compose(&self, reply: &Reply, sink: &Sink) -> (NonEmptyText, Option<String>) {
+        match self {
+            Self::Brief(brief) => (brief.clone(), None),
+            Self::Mail { brief, body } => {
+                let envelope = Envelope::resolve(reply, sink);
+                let text = after_brief(brief.as_ref(), &envelope.wrap(body));
+                (text, Some(envelope.id().to_owned()))
+            }
+        }
+    }
+}
+
+/// A rendered envelope behind the brief that introduces it, or on its own when there is none.
+///
+/// Split out of [`Delivery::compose`] so the composition is testable: the resolution it sits beside
+/// makes a herdr call, and automated tests here never start one. A blank line between the two, so a
+/// brief ending mid-paragraph does not run into the envelope's opening tag.
+///
+/// Composed rather than re-parsed: a brief is already non-blank and a wrapping always opens with a
+/// tag, so neither half can make the result blank.
+fn after_brief(brief: Option<&NonEmptyText>, mail: &str) -> NonEmptyText {
+    match brief {
+        Some(brief) => NonEmptyText::composed(format!("{brief}\n\n{mail}")),
+        None => NonEmptyText::composed(mail.to_owned()),
     }
 }
 
@@ -323,16 +391,15 @@ fn delivery_window(message_lines: usize) -> u32 {
 /// two submissions both failed to move the agent.
 pub(super) fn deliver(
     target: &str,
-    text: &NonEmptyText,
+    delivery: &Delivery,
     reply: &Reply,
     proof: &Proof,
     sink: &Sink,
 ) -> Result<Submission, MsgError> {
-    // Resolved and rendered once, before the re-send: a second submission must deliver the same
-    // bytes as the first, and re-resolving would make a second `agent get` call to say so — and mint
-    // a second id, leaving the pane check hunting for a token no delivered copy carries.
-    let envelope = Envelope::resolve(reply, sink);
-    let text = NonEmptyText::composed(envelope.wrap(text));
+    // Composed once, before the re-send: a second submission must deliver the same bytes as the
+    // first, and re-composing would make a second `agent get` call to say so — and mint a second id,
+    // leaving the pane check hunting for a token no delivered copy carries.
+    let (text, id) = delivery.compose(reply, sink);
     let wait = proof.wait();
 
     let agent = match agent::prompt(target, &text, wait) {
@@ -352,12 +419,15 @@ pub(super) fn deliver(
 
     // A returned wait is a matched wait: herdr answers the states it was given or it errors, so
     // there is nothing left to check for that arm.
-    let proven = match proof {
-        Proof::None => false,
-        Proof::Wait(_) => true,
-        Proof::Pane => confirm_in_pane(envelope.id(), &text, |source, lines| {
-            agent::read(target, source, "text", lines)
-        }),
+    let proven = match (proof, &id) {
+        (Proof::None, _) => false,
+        (Proof::Wait(_), _) => true,
+        (Proof::Pane, Some(id)) => {
+            confirm_in_pane(id, &text, |source, lines| agent::read(target, source, "text", lines))
+        }
+        // An unattributed brief carries no id, so there is nothing in the pane to match. Unproven is
+        // the honest answer, and the same one a snapshot that could not be read produces.
+        (Proof::Pane, None) => false,
     };
 
     Ok(Submission { agent, proven })
@@ -625,6 +695,38 @@ mod tests {
     #[test]
     fn a_blank_prompt_is_refused_at_parse_time() {
         assert!(Harness::try_parse_from(["msg", "reviewer", "   "]).is_err());
+    }
+
+    /// A brief is not mail, so it is delivered exactly as written.
+    ///
+    /// This arm reaches no herdr call at all, which is what lets it be exercised here: there is no
+    /// sender to resolve, because nobody sent it. The reply is passed in anyway to pin that it makes
+    /// no difference — an envelope is what a reply address rides on, and there is none.
+    #[test]
+    fn a_brief_is_delivered_unwrapped_and_carries_no_id_to_be_proven_by() {
+        let brief = "You review Rust.".parse::<NonEmptyText>().unwrap();
+
+        for reply in [Reply::ToSender, Reply::None, Reply::To("collector".to_owned())] {
+            let (text, id) = Delivery::Brief(brief.clone()).compose(&reply, &Sink::new(crate::core::OutputMode::Human));
+
+            assert_eq!(text.to_string(), "You review Rust.", "{reply:?}");
+            assert!(id.is_none(), "nothing to search a pane for");
+            assert!(!text.to_string().contains("<mail"), "{reply:?}");
+            assert!(!text.to_string().contains("<how-to-reply>"), "{reply:?}");
+        }
+    }
+
+    /// The brief leads, so the message reads as an instruction about it.
+    #[test]
+    fn a_brief_sits_ahead_of_the_envelope_with_a_blank_line_between_them() {
+        let brief = "You review Rust.".parse::<NonEmptyText>().unwrap();
+        let mail = "<mail from=\"operator\" id=\"k7m2x9\">\nstart with auth\n</mail>";
+
+        assert_eq!(
+            after_brief(Some(&brief), mail).to_string(),
+            format!("You review Rust.\n\n{mail}")
+        );
+        assert_eq!(after_brief(None, mail).to_string(), mail);
     }
 
     /// The window is sized to the message, which is what scrolled the transcript in the first place.

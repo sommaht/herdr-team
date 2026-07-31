@@ -100,8 +100,13 @@ prompt_file = 'review.md'
 
 `spawn reviewer --msg "start with auth"` then delivers the file's contents, a blank line, and the
 message, in one submission — an agent handed two would answer the first before it heard the second.
-With no `--msg` the file is delivered alone. A file that is missing or blank is a refusal, raised
-before anything is created.
+A file that is missing or blank is a refusal, raised before anything is created.
+
+The brief rides *outside* the mail envelope. A message is wrapped in `<mail from="…">` naming who
+sent it, and a brief has no sender to name: it comes from a file the recipient's own config points
+at, so wrapping it would have the envelope claim that whoever ran `spawn` wrote it. With no `--msg`
+the brief is delivered alone and unwrapped, which invites no reply — so `--no-reply` and
+`--reply-to` are refused there, having no envelope to shape.
 
 ## The repository layer
 

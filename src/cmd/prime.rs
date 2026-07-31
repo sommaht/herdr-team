@@ -74,8 +74,8 @@ the output rather than you reading it. `prime` is the one exception: its brief i
     spawn <name> --focus                  move the cursor to it; off by default
     spawn <name> -- <agent args>          extra args, appended after the config's
 
-An agent may carry a brief, which precedes your message. A scalar it declares is overridden and
-a vector extended, so `--` adds to its flags, never replaces.
+An agent may carry a brief, which precedes your message unwrapped — it is config, not mail. A
+scalar it declares is overridden and a vector extended, so `--` adds to its flags, never replaces.
 
 ## Messaging agents
 
