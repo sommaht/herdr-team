@@ -51,8 +51,13 @@ const DEFAULT_SETTLE_MS: u64 = 10_000;
     herdr-team spawn reviewer --placement tab --agent opus\n  \
     herdr-team spawn fixer --agent sonnet --msg \"Fix the flaky tests\"\n  \
     git diff | herdr-team spawn reviewer --msg -\n  \
+    herdr-team spawn scratch --kind codex -- --no-alt-screen\n  \
     herdr-team spawn big --placement workspace --agent fable -- --resume\n  \
-    herdr-team spawn fixer --placement worktree --branch worktree/flake-fix")]
+    herdr-team spawn fixer --placement worktree --branch worktree/flake-fix\n\
+    \n\
+    A scalar an agent declares is overridden; a vector is extended. So `-- <agent args>` \
+    follows the agent's own flags rather than replacing them, and the agent CLI's last-flag-wins \
+    rule settles any conflict.")]
 pub struct SpawnArgs {
     /// The agent's name; must satisfy herdr's rule, which is checked before anything is created.
     name: AgentName,
@@ -78,6 +83,18 @@ pub struct SpawnArgs {
     /// The agent to start; defaults to the config's `default`.
     #[arg(long, value_name = "NAME")]
     agent: Option<String>,
+
+    /// Start this agent kind directly, reading no config at all.
+    ///
+    /// The zero-config route: everything a config would have supplied is then said on the line, with
+    /// `-- <agent args>` carrying the flags. Passed to herdr untouched, so a kind this build has
+    /// never heard of works the day herdr learns it.
+    // Not validated here, for the reason the config's `kind` field is a plain `String`: herdr answers
+    // `unsupported_agent_kind` from its own compile-time list, and restating that list would drift.
+    // The conflicts are refusals rather than precedence, per the rule `--branch` follows — a flag
+    // that is silently ignored is a caller who never learns what did not happen.
+    #[arg(long, value_name = "KIND", conflicts_with_all = ["agent", "config"])]
+    kind: Option<String>,
 
     /// Renamed to `--agent`; declared only so the rename can be reported rather than guessed at.
     #[arg(long, value_name = "NAME", hide = true)]
@@ -232,6 +249,44 @@ impl SpawnArgs {
         Ok(())
     }
 
+    /// What to start: the kind `--kind` named, or the agent the config resolves.
+    ///
+    /// `--kind` reads no config at all, which is the point of it. A caller naming a kind has said
+    /// everything a config would have said, and a config that is missing or malformed must not break
+    /// the one route that needs nothing from it — the same stance `msg` takes by never loading one.
+    ///
+    /// A scalar the config declares is overridden and a vector is extended, here as in a `base`
+    /// chain: `--kind` replaces the kind outright, while `-- <agent args>` follows the agent's own
+    /// flags rather than replacing them. Agent CLIs are last-flag-wins, so appending *is* overriding
+    /// — and it leaves adding one flag a one-token edit instead of a restatement of all of them.
+    ///
+    /// # Errors
+    ///
+    /// [`SpawnError::NoConfig`] when there is no config to resolve against, [`SpawnError::Config`]
+    /// for every other config failure — a file that will not parse, an agent that does not exist, or
+    /// a brief that cannot be read. The brief is read here, among the pre-checks, so a missing one is
+    /// refused while a refusal is still free rather than after a surface exists.
+    fn configured(&self, cwd: &Path, sink: &Sink) -> Result<Configured, SpawnError> {
+        if let Some(kind) = &self.kind {
+            return Ok(Configured {
+                kind: kind.clone(),
+                args: self.agent_args.clone(),
+                // No config, so no agent, so nothing that could carry a brief.
+                brief: None,
+            });
+        }
+
+        let config = Config::load(self.config.as_deref(), Some(cwd), sink)?;
+        let agent = config.resolve(self.agent.as_deref())?;
+        let mut args = agent.agent_args();
+        args.extend(self.agent_args.iter().cloned());
+        Ok(Configured {
+            kind: agent.kind().to_owned(),
+            args,
+            brief: agent.brief()?,
+        })
+    }
+
     /// Makes the surface this placement calls for, and reports the checkout when it made one.
     ///
     /// Named rather than inlined into [`execute`](Cmd::execute) because it is the one step with a
@@ -305,17 +360,7 @@ impl Cmd for SpawnArgs {
         };
 
         // `as_path`, not `&cwd`: `Option<&PathBuf>` does not coerce to `Option<&Path>`.
-        let config = Config::load(self.config.as_deref(), Some(cwd.as_path()), sink)?;
-        let agent = config.resolve(self.agent.as_deref())?;
-        let mut args = agent.agent_args();
-        args.extend(self.agent_args.iter().cloned());
-        let configured = Configured {
-            kind: agent.kind().to_owned(),
-            args,
-            // Read here, among the other pre-checks: a missing brief is refused while a refusal is
-            // still free, rather than after a surface exists.
-            brief: agent.brief()?,
-        };
+        let configured = self.configured(cwd.as_path(), sink)?;
 
         let cwd = cwd.to_string_lossy().into_owned();
 
@@ -334,10 +379,10 @@ impl Cmd for SpawnArgs {
     }
 }
 
-/// What the config settled for this spawn.
+/// What this spawn settled on for the agent it starts.
 ///
-/// One value rather than three parameters, because they are one answer — the agent `--agent` named,
-/// resolved — and they are read together at the single call site that starts it.
+/// One value rather than three parameters, because they are one answer — the agent `--agent` named
+/// or the kind `--kind` did — and they are read together at the single call site that starts it.
 struct Configured {
     /// The agent kind, passed to `agent start --kind` untouched.
     kind: String,
@@ -590,7 +635,17 @@ pub enum SpawnError {
     },
     /// The config could not be read, or did not hold the named agent.
     #[error(transparent)]
-    Config(#[from] ConfigError),
+    Config(ConfigError),
+    /// There is no config to resolve an agent against.
+    ///
+    /// Distinct from [`ConfigError::Missing`] only in what it recommends: this is the one command
+    /// that can start an agent without a config at all, so the refusal leads with that.
+    #[error("no config file to resolve an agent from; pass --kind <KIND> to start one directly, \
+             or write a config at {}", path.display())]
+    NoConfig {
+        /// Where a config was looked for.
+        path: PathBuf,
+    },
     /// There is no current directory to hand the new surface.
     #[error("cannot read the current directory to use as the new surface's cwd: {0}")]
     NoWorkingDirectory(#[source] std::io::Error),
@@ -632,6 +687,26 @@ impl SpawnError {
     }
 }
 
+/// Hand-written rather than `#[from]`, for the one arm the derive cannot express.
+///
+/// A missing config is the refusal this command alone can answer twice over — write the file, or
+/// pass `--kind` and need none — so it becomes [`SpawnError::NoConfig`] rather than being carried
+/// through as the generic config failure the other commands report. Every other config failure is
+/// carried exactly as it came, which is what `#[from]` did for all of them.
+///
+/// Written as the conversion rather than as a helper the fallible call site remembers to apply, so
+/// no `?` on a [`ConfigError`] can bypass it. The other two sites that produce one — resolving the
+/// named agent, and reading its brief — cannot produce [`ConfigError::Missing`] at all, so the
+/// mapping is a no-op for them.
+impl From<ConfigError> for SpawnError {
+    fn from(error: ConfigError) -> Self {
+        match error {
+            ConfigError::Missing { path } => Self::NoConfig { path },
+            other => Self::Config(other),
+        }
+    }
+}
+
 impl AsExitStatus for SpawnError {
     fn exit_status(&self) -> ExitStatus {
         match self {
@@ -639,6 +714,7 @@ impl AsExitStatus for SpawnError {
                 ExitStatus::Usage
             }
             Self::Config(error) => error.exit_status_hint(),
+            Self::NoConfig { .. } => ExitStatus::NotFound,
             Self::NoWorkingDirectory(_) => ExitStatus::Failure,
             Self::Herdr(error) => error.exit_status(),
             Self::Msg(error) => error.exit_status(),
@@ -657,6 +733,7 @@ impl AsExitStatus for SpawnError {
             | Self::RenamedFlag { .. }
             | Self::ReservedName
             | Self::Config(_)
+            | Self::NoConfig { .. }
             | Self::NoWorkingDirectory(_)
             | Self::PaneNeverSettled { .. } => None,
         }
@@ -763,6 +840,85 @@ mod tests {
     fn record() -> AgentRecord {
         serde_json::from_str(r#"{"agent":"claude","agent_status":"working","pane_id":"w4:p17","name":"reviewer"}"#)
             .unwrap()
+    }
+
+    /// The zero-config route, and the assertion that it really is one.
+    ///
+    /// No config is read at all, which is what makes this usable before anyone has written one and
+    /// what keeps a malformed file from breaking it. The temp directory is handed in as `cwd` so the
+    /// repository walk would have somewhere real to look if it ran — the point is that it does not.
+    #[test]
+    fn a_kind_starts_an_agent_with_no_config_read_at_all() {
+        let elsewhere = tempfile::tempdir().unwrap();
+        let args = parse(&["spawn", "scratch", "--kind", "codex", "--", "--no-alt-screen"]);
+
+        let configured = args
+            .configured(elsewhere.path(), &Sink::new(crate::core::OutputMode::Human))
+            .expect("a kind needs nothing else");
+
+        assert_eq!(configured.kind, "codex");
+        assert_eq!(
+            configured.args,
+            ["--no-alt-screen"],
+            "the caller's args, and only those"
+        );
+        assert!(configured.brief.is_none(), "no agent, so nothing that carries a brief");
+    }
+
+    /// A kind this build has never heard of is herdr's to refuse, not this crate's.
+    ///
+    /// The same reason the config's `kind` is a plain `String`: herdr answers
+    /// `unsupported_agent_kind` from a list that is not published anywhere machine-readable, and a
+    /// copy of it here would refuse a kind herdr had just learned.
+    #[test]
+    fn a_kind_this_build_has_no_harness_for_is_passed_through_rather_than_refused() {
+        let elsewhere = tempfile::tempdir().unwrap();
+        let args = parse(&["spawn", "scratch", "--kind", "some-agent-shipped-next-year"]);
+
+        let configured = args
+            .configured(elsewhere.path(), &Sink::new(crate::core::OutputMode::Human))
+            .expect("herdr is the authority on kinds");
+
+        assert_eq!(configured.kind, "some-agent-shipped-next-year");
+    }
+
+    /// Both name what starts, so passing both is a caller that has not decided.
+    ///
+    /// A refusal rather than a precedence rule, for the reason `--branch` under the wrong placement
+    /// is refused: a flag that is silently ignored is a caller who never learns what did not happen.
+    #[test]
+    fn a_kind_is_refused_beside_the_two_flags_it_would_otherwise_ignore() {
+        assert!(Harness::try_parse_from(["spawn", "w", "--kind", "codex", "--agent", "sol"]).is_err());
+        assert!(Harness::try_parse_from(["spawn", "w", "--kind", "codex", "--config", "./c.toml"]).is_err());
+        // Neither flag is harmed on its own.
+        assert_eq!(parse(&["spawn", "w", "--kind", "codex"]).kind.as_deref(), Some("codex"));
+        assert_eq!(parse(&["spawn", "w", "--agent", "sol"]).agent.as_deref(), Some("sol"));
+    }
+
+    /// The refusal a caller with no config meets names both routes out of it.
+    ///
+    /// Both halves matter: the path is what someone who meant to have a config needs, and `--kind`
+    /// is what someone who never wanted one needs. Which of those a caller is, this cannot know.
+    #[test]
+    fn no_config_is_answered_with_the_path_to_write_and_the_flag_that_needs_none() {
+        let error = SpawnError::from(ConfigError::Missing {
+            path: PathBuf::from("/home/someone/.config/herdr-team/config.toml"),
+        });
+
+        assert_eq!(error.exit_status(), ExitStatus::NotFound);
+        assert!(error.to_string().contains("--kind"), "{error}");
+        assert!(error.to_string().contains("/home/someone/.config"), "{error}");
+    }
+
+    /// Only the missing-file case is restated; every other config failure is carried as it came.
+    #[test]
+    fn a_config_that_exists_and_is_broken_is_reported_as_the_config_failure_it_is() {
+        let error = SpawnError::from(ConfigError::NoDefault {
+            paths: "/named/config.toml".to_owned(),
+        });
+
+        assert!(matches!(error, SpawnError::Config(_)), "got {error:?}");
+        assert!(!error.to_string().contains("--kind"), "{error}");
     }
 
     /// A typo is answered with the whole value set, which the flag group it replaced could not do:

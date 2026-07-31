@@ -4,7 +4,7 @@ Launching a [herdr](https://herdr.dev) agent by hand is two steps: herdr starts 
 pane that already exists and is sitting at an interactive shell prompt, so you create a surface,
 dig the new pane's id out of the JSON, and then start the agent in it. This does both in one
 command, resolves the agent's kind and its usual flags from a named agent in the config, and takes
-prompt text on stdin.
+message text on stdin. It runs with no config at all: `--kind` names a herdr agent kind directly.
 
 ## Commands
 
@@ -23,6 +23,7 @@ and nothing else, because a hook that fails is worse than one that says little.
 
 ```
 herdr-team spawn reviewer --placement tab --agent opus --msg "Review the branch"
+herdr-team spawn scratch --kind codex
 git diff | herdr-team msg reviewer -
 herdr-team kill reviewer
 herdr-team agents
@@ -36,11 +37,28 @@ person typing into it — so the retry belongs after the named state changes, no
 The command was called `prompt` until it started wrapping what it sends, and `msg` still answers to
 that name. So does `spawn --prompt`, now `--msg`.
 
+## Without a config
+
+`spawn --kind <kind>` starts an agent kind directly and reads no config at all — not the user's, not
+the repository's, not one `--config` names. Everything a config would have supplied is said on the
+line instead:
+
+```
+herdr-team spawn scratch --kind codex -- --no-alt-screen
+```
+
+The kind goes to herdr untouched, for the reason the config's own `kind` field is a plain string:
+herdr answers `unsupported_agent_kind` from a list this build does not restate, so a kind herdr
+learns tomorrow works without a release here. `--kind` is refused beside `--agent` and `--config`,
+which it would otherwise silently ignore.
+
+A config earns its keep once you want a name for a set of flags, a default, or a brief.
+
 ## Agents
 
 `$XDG_CONFIG_HOME/herdr-team/config.toml`, falling back to
 `~/.config/herdr-team/config.toml`. Override the location with `--config` or with
-`HERDR_TEAM_CONFIG`.
+`HERDR_TEAM_CONFIG`. `examples/config.toml` in this repository is a worked one to copy.
 
 Agents are what the file holds today, and the filename deliberately does not say so: a name
 that names one table has to change the first time a second one is added.

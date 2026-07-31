@@ -67,12 +67,15 @@ the output rather than you reading it. `prime` is the one exception: its brief i
     spawn <name> --placement worktree     a Git worktree of its own, on a new branch
     spawn <name> --branch <name>          name that branch; otherwise herdr picks
     spawn <name> --agent <agent>          pick which agent starts; see Agents below
+    spawn <name> --kind <kind>            start a kind directly, reading no config at all
     spawn <name> --msg \"<text>\"           deliver a first message once it is up
     spawn <name> --msg -                  read that first message from stdin
-    spawn <name> --agent <agent>          an agent may carry a brief; it precedes your message
     spawn <name> --cwd <path>             start it somewhere other than here
     spawn <name> --focus                  move the cursor to it; off by default
     spawn <name> -- <agent args>          extra args, appended after the config's
+
+An agent may carry a brief, which precedes your message. A scalar it declares is overridden and
+a vector extended, so `--` adds to its flags, never replaces.
 
 ## Messaging agents
 
