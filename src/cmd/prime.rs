@@ -88,7 +88,7 @@ the output rather than you reading it. `prime` is the one exception: its brief i
 
 Every prompt you send is wrapped before it lands, and every prompt you receive arrives wrapped.
 
-    <mail from=\"dispatcher\">
+    <mail from=\"dispatcher\" id=\"k7m2x9\">
     audit the CLI surface and list what is undocumented
     </mail>
     <how-to-reply>
@@ -98,9 +98,10 @@ Every prompt you send is wrapped before it lands, and every prompt you receive a
     </how-to-reply>
 
 `from` is who sent it: an agent's name, its pane id when it has no name, or `operator` for a
-person. `<how-to-reply>` is present when a reply is wanted and absent when it is not — run the
-command it holds, substituting your reply for the placeholder. It already carries `--no-reply`,
-so your answer closes the loop rather than inviting another.
+person. `id` names that one message, and is how the sender proved it reached you. `<how-to-reply>`
+is present when a reply is wanted and absent when it is not — run the command it holds,
+substituting your reply for the placeholder. It already carries `--no-reply`, so your answer
+closes the loop rather than inviting another.
 
 When to reply is what the message itself says. A question wants an answer now; dispatched work
 wants a report when the work is done, not an acknowledgement on receipt.
