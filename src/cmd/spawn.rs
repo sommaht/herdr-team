@@ -18,7 +18,7 @@ use serde::Serialize;
 use thiserror::Error;
 
 use crate::cmd::msg::envelope::{OPERATOR, Reply};
-use crate::cmd::msg::{Proof, deliver};
+use crate::cmd::msg::{Delivery, Proof, deliver};
 use crate::cmd::{AsExitStatus, Cmd, ExitStatus};
 use crate::config::{Config, ConfigError};
 use crate::core::{AgentName, Backoff, NonEmptyText, PaneId, Sink};
@@ -233,6 +233,34 @@ impl SpawnArgs {
         Ok(())
     }
 
+    /// Refuses a reply flag on a spawn with no message for it to shape.
+    ///
+    /// Both flags describe an envelope, and a spawn with no `--msg` delivers none: an agent's brief
+    /// is instructions from a config file rather than mail, so it names no sender and invites no
+    /// answer. Refused rather than ignored, for the reason `--branch` under the wrong placement is —
+    /// a caller templating `--reply-to` onto every spawn would otherwise never learn that the report
+    /// it is waiting for was never asked for.
+    ///
+    /// clap cannot express this either: `requires` would fire on the argument being *present*, which
+    /// is the right shape, but it would then also reject the `--placement worktree` spawn that means
+    /// to deliver nothing at all. The predicate is about a second argument's absence, so it lives
+    /// here among the other pre-checks.
+    ///
+    /// # Errors
+    ///
+    /// [`SpawnError::ReplyFlagWithoutMessage`], naming the flag and what it needs.
+    fn check_reply_flags(&self) -> Result<(), SpawnError> {
+        if self.msg.is_some() {
+            return Ok(());
+        }
+        for (flag, given) in [("--no-reply", self.no_reply), ("--reply-to", self.reply_to.is_some())] {
+            if given {
+                return Err(SpawnError::ReplyFlagWithoutMessage { flag });
+            }
+        }
+        Ok(())
+    }
+
     /// Refuses a flag this build renamed, naming what replaced it.
     ///
     /// Not left to clap: its suggestion machinery scores `--preset` too far from `--agent` to offer
@@ -347,6 +375,7 @@ impl Cmd for SpawnArgs {
         }
         self.check_renamed_flags()?;
         self.check_worktree_flags()?;
+        self.check_reply_flags()?;
         let anchor = match self.placement {
             Placement::Pane => Some(anchor(std::env::var(PANE_VARIABLE).ok().as_deref())?),
             Placement::Tab | Placement::Workspace | Placement::Worktree => None,
@@ -414,9 +443,9 @@ impl SpawnArgs {
 
         let started = self.start_when_settled(pane, &configured.kind, &configured.args)?;
 
-        // The agent's configured brief and the caller's `--msg` are one message: an agent that got
-        // two would answer the first before hearing the second.
-        let Some(text) = first_prompt(configured.brief.as_ref(), self.msg.as_deref()) else {
+        // One submission whatever it holds: an agent handed two would answer the first before it
+        // heard the second.
+        let Some(delivery) = first_delivery(configured.brief.clone(), self.msg.as_deref().cloned()) else {
             return Ok(Spawned {
                 placement: self.placement,
                 delivered: None,
@@ -431,15 +460,15 @@ impl SpawnArgs {
         // `prompt`'s problem is met here too, and by the same rule: an agent that came up working
         // has no state change left for herdr to match, so its pane is read for the message instead.
         let proof = Proof::for_delivery(started.status(), DEFAULT_SETTLE_MS);
-        let submission = deliver(pane, &text, &self.reply(), &proof, sink)?;
+        let submission = deliver(pane, &delivery, &self.reply(), &proof, sink)?;
 
         // Said out loud rather than left to the `delivered` field, which only the `--json` reader
         // sees — a caller reading the one line would otherwise wait forever on work that was never
-        // proven to start.
+        // proven to start. Worded for both ways the pane proof comes up empty: a message the pane
+        // never showed, and a brief carrying no id that could have been looked for.
         if !submission.proven {
             sink.warn(&format!(
-                "{} was already working when its first prompt was sent, and its pane never showed \
-                 the message, so delivery is unproven",
+                "{} was already working when its first prompt was sent, so delivery is unproven",
                 self.name
             ));
         }
@@ -625,6 +654,12 @@ pub enum SpawnError {
         /// The flag that cannot be honored here.
         flag: &'static str,
     },
+    /// A reply flag on a spawn with no message for it to shape.
+    #[error("{flag} needs --msg; a spawn delivering only the agent's brief sends no envelope")]
+    ReplyFlagWithoutMessage {
+        /// The flag that has nothing to apply to.
+        flag: &'static str,
+    },
     /// A flag this build renamed.
     #[error("{old} is now {new}")]
     RenamedFlag {
@@ -710,9 +745,11 @@ impl From<ConfigError> for SpawnError {
 impl AsExitStatus for SpawnError {
     fn exit_status(&self) -> ExitStatus {
         match self {
-            Self::MissingAnchor | Self::WorktreeOnlyFlag { .. } | Self::RenamedFlag { .. } | Self::ReservedName => {
-                ExitStatus::Usage
-            }
+            Self::MissingAnchor
+            | Self::WorktreeOnlyFlag { .. }
+            | Self::ReplyFlagWithoutMessage { .. }
+            | Self::RenamedFlag { .. }
+            | Self::ReservedName => ExitStatus::Usage,
             Self::Config(error) => error.exit_status_hint(),
             Self::NoConfig { .. } => ExitStatus::NotFound,
             Self::NoWorkingDirectory(_) => ExitStatus::Failure,
@@ -730,6 +767,7 @@ impl AsExitStatus for SpawnError {
             Self::AfterSurface { error, .. } => error.herdr(),
             Self::MissingAnchor
             | Self::WorktreeOnlyFlag { .. }
+            | Self::ReplyFlagWithoutMessage { .. }
             | Self::RenamedFlag { .. }
             | Self::ReservedName
             | Self::Config(_)
@@ -761,17 +799,18 @@ fn anchor(variable: Option<&str>) -> Result<PaneId, SpawnError> {
         .ok_or(SpawnError::MissingAnchor)
 }
 
-/// The first prompt: the agent's brief, the caller's text, or the brief followed by it.
+/// What this spawn delivers once the agent is up, if anything.
 ///
-/// The brief comes first so the caller's instruction reads as an instruction about it, separated by a
-/// blank line so a brief ending mid-paragraph does not run into the instruction.
+/// The caller's `--msg` is what decides the shape, because it is the only half with an author: text
+/// somebody wrote is mail and gets an envelope naming them, where the agent's configured brief is
+/// instructions from a file and gets delivered exactly as written. A brief that rode inside the
+/// envelope would have it name whoever ran `spawn` as the author of something they did not write.
 ///
-/// `None` only when there is neither, which is a spawn with nothing to deliver. Composed rather than
-/// re-parsed: both halves are already non-blank, so the result cannot be.
-fn first_prompt(brief: Option<&NonEmptyText>, text: Option<&NonEmptyText>) -> Option<NonEmptyText> {
-    match (brief, text) {
-        (Some(brief), Some(text)) => Some(NonEmptyText::composed(format!("{brief}\n\n{text}"))),
-        (Some(only), None) | (None, Some(only)) => Some(only.clone()),
+/// `None` only when there is neither, which is a spawn with nothing to deliver.
+fn first_delivery(brief: Option<NonEmptyText>, msg: Option<NonEmptyText>) -> Option<Delivery> {
+    match (brief, msg) {
+        (brief, Some(body)) => Some(Delivery::Mail { brief, body }),
+        (Some(brief), None) => Some(Delivery::Brief(brief)),
         (None, None) => None,
     }
 }
@@ -1117,29 +1156,83 @@ mod tests {
         );
     }
 
-    /// The brief comes first, so the caller's instruction reads as an instruction about it.
+    /// The caller's message is what decides the shape, because it is the only half with an author.
+    ///
+    /// The brief rides alongside the envelope rather than inside it: it comes from a file the
+    /// recipient's own config points at, and an envelope around it would name whoever ran `spawn` as
+    /// the author of something they did not write.
     #[test]
-    fn a_brief_and_a_prompt_are_delivered_as_one_message_with_a_blank_line_between() {
+    fn a_message_is_mail_and_the_brief_rides_outside_the_envelope() {
         let brief = "You review Rust.".parse::<NonEmptyText>().unwrap();
-        let text = "start with the auth module".parse::<NonEmptyText>().unwrap();
+        let body = "start with the auth module".parse::<NonEmptyText>().unwrap();
 
-        assert_eq!(
-            first_prompt(Some(&brief), Some(&text)).unwrap().to_string(),
-            "You review Rust.\n\nstart with the auth module"
-        );
+        let delivery = first_delivery(Some(brief), Some(body)).expect("there is a message");
+
+        match delivery {
+            Delivery::Mail { brief, body } => {
+                assert_eq!(brief.expect("the agent has one").to_string(), "You review Rust.");
+                assert_eq!(body.to_string(), "start with the auth module");
+            }
+            Delivery::Brief(_) => panic!("a spawn with --msg delivers mail"),
+        }
+    }
+
+    /// A brief with nothing behind it is not mail, so it gets no envelope at all.
+    ///
+    /// Which is the point of the split: an agent started with only its own standing instructions has
+    /// nobody to reply to, and a `<how-to-reply>` addressed at the person who ran `spawn` would be
+    /// inviting an answer to a message that was never sent.
+    #[test]
+    fn a_brief_with_no_message_behind_it_is_delivered_unwrapped() {
+        let brief = "You review Rust.".parse::<NonEmptyText>().unwrap();
+
+        match first_delivery(Some(brief), None).expect("the brief is delivered") {
+            Delivery::Brief(text) => assert_eq!(text.to_string(), "You review Rust."),
+            Delivery::Mail { .. } => panic!("a brief has no sender to put on an envelope"),
+        }
     }
 
     #[test]
-    fn either_half_alone_is_delivered_unchanged_and_neither_delivers_nothing() {
-        let brief = "You review Rust.".parse::<NonEmptyText>().unwrap();
-        let text = "audit the CLI".parse::<NonEmptyText>().unwrap();
+    fn a_message_with_no_brief_is_mail_with_nothing_ahead_of_it_and_neither_is_nothing() {
+        let body = "audit the CLI".parse::<NonEmptyText>().unwrap();
 
-        assert_eq!(
-            first_prompt(Some(&brief), None).unwrap().to_string(),
-            "You review Rust."
+        match first_delivery(None, Some(body)).expect("there is a message") {
+            Delivery::Mail { brief, body } => {
+                assert!(brief.is_none());
+                assert_eq!(body.to_string(), "audit the CLI");
+            }
+            Delivery::Brief(_) => panic!("a spawn with --msg delivers mail"),
+        }
+
+        assert!(first_delivery(None, None).is_none(), "nothing to deliver");
+    }
+
+    /// Both flags describe an envelope, and a spawn with no message delivers none.
+    #[test]
+    fn a_reply_flag_is_refused_on_a_spawn_that_sends_no_envelope() {
+        for flag in [vec!["--no-reply"], vec!["--reply-to", "collector"]] {
+            let mut argv = vec!["spawn", "worker"];
+            argv.extend(flag.iter().copied());
+
+            let error = parse(&argv).check_reply_flags().expect_err("nothing to shape");
+
+            assert_eq!(error.exit_status(), ExitStatus::Usage);
+            assert!(error.to_string().contains("--msg"), "{error}");
+        }
+
+        // A message is all either flag needs.
+        assert!(
+            parse(&["spawn", "worker", "--msg", "go", "--no-reply"])
+                .check_reply_flags()
+                .is_ok()
         );
-        assert_eq!(first_prompt(None, Some(&text)).unwrap().to_string(), "audit the CLI");
-        assert!(first_prompt(None, None).is_none());
+        assert!(
+            parse(&["spawn", "worker", "--msg", "go", "--reply-to", "collector"])
+                .check_reply_flags()
+                .is_ok()
+        );
+        // And a spawn that asks for neither is not refused for delivering nothing.
+        assert!(parse(&["spawn", "worker"]).check_reply_flags().is_ok());
     }
 
     #[test]
