@@ -142,9 +142,10 @@ Launch a reviewer in its own tab and hand it the diff:
 
     git diff | herdr-agent-tools spawn reviewer --placement tab --prompt -
 
-Dispatch work and block until there is a result to read:
+Dispatch work and block until there is a result to read. No reply is invited, because you are
+already watching — where the fan-out below invites one instead and does not wait at all:
 
-    herdr-agent-tools prompt reviewer \"run the tests and report failures\" --wait-until idle
+    herdr-agent-tools prompt reviewer \"run the tests\" --no-reply --wait-until idle
 
 Fan out, then clean up when one is done:
 
