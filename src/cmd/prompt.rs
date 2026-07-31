@@ -26,6 +26,33 @@ use crate::herdr::{HerdrError, HerdrRef};
 /// on an agent that is never going to answer.
 const DEFAULT_TIMEOUT_MS: u64 = 15_000;
 
+/// herdr's rendering that rejoins soft-wrapped rows into the logical lines they were written as.
+///
+/// Not `recent`, which walks display rows: Codex announces a queued message with a banner running to
+/// eighty-eight characters, and in any narrower pane — a vertical split, which is the default
+/// placement — that banner breaks across two rows, taking any match with it.
+///
+/// Not `detection` either, which is where the composer guard reads. herdr builds it as `recent`
+/// pinned to the terminal's own row count, so `--lines` can only ever shrink it. A message long
+/// enough to scroll the transcript is a message `detection` cannot see.
+const DELIVERY_SOURCE: &str = "recent-unwrapped";
+
+/// Rows read past the message's own height, covering the harness furniture drawn beneath it.
+const DELIVERY_MARGIN: u32 = 40;
+
+/// The most rows one read can return, which herdr clamps to whatever is asked for.
+const DELIVERY_MAX_LINES: u32 = 1_000;
+
+/// How long to keep looking for a message's id before giving up on proving it landed.
+///
+/// A harness renders a queued message within a frame or two, so this is generous. It is spent only
+/// when the proof is not there, which is either a genuinely undelivered prompt or a harness whose
+/// rendering this build no longer recognizes.
+const DELIVERY_POLL_MS: u64 = 3_000;
+
+/// How long to wait between looks.
+const DELIVERY_INTERVAL_MS: u64 = 250;
+
 // =====================================================================================================================
 // Prompt Args
 // =====================================================================================================================
@@ -79,31 +106,19 @@ pub struct PromptArgs {
 }
 
 impl PromptArgs {
-    /// The delivery wait these flags build, or `None` when no wait could prove anything.
-    ///
-    /// `--until working` is the load-bearing default: it returns as soon as delivery is proven,
-    /// where herdr's bare `--wait` would wait for the whole turn to finish.
-    ///
-    /// That default is dropped for a target that is **already** working, because herdr cannot match
-    /// it. A `--until` state counts only once the agent's state-change sequence has passed the
-    /// submission's, and that sequence advances only when the status actually changes — so an agent
-    /// working before and working after never satisfies it. Asking anyway spends the whole timeout
-    /// and then reports a prompt that did land as undelivered.
+    /// How this submission's delivery will be proven, given what the target is doing now.
     ///
     /// An explicit `--wait-until` is honored whatever the current status, because the caller is
     /// asking about a transition rather than about delivery: `--wait-until idle` against a working
     /// agent is a request to wait out the turn, and that transition does happen.
-    fn wait(&self, current: &str) -> Option<Wait> {
+    fn proof(&self, current: &str) -> Proof {
         if self.no_verify {
-            return None;
+            return Proof::None;
         }
         if self.wait_until.is_empty() {
-            return (current != WORKING).then(|| Wait {
-                until: vec![WORKING.to_owned()],
-                timeout: self.timeout,
-            });
+            return Proof::for_delivery(current, self.timeout);
         }
-        Some(Wait {
+        Proof::Wait(Wait {
             until: self.wait_until.clone(),
             timeout: self.timeout,
         })
@@ -148,27 +163,139 @@ impl Cmd for PromptArgs {
             }
         }
 
-        // The honest gap: an agent already working has no state change left to make, so nothing a
-        // wait could observe would prove this landed. Submitted anyway — herdr queues it, and the
-        // target picks it up when its turn ends — and reported as unverified rather than as a
-        // guarantee this did not earn.
-        let wait = self.wait(before.status());
-        let verified = wait.is_some();
-        if !verified && !self.no_verify {
+        let proof = self.proof(before.status());
+        let submission = deliver(&self.target, &self.text, &self.reply(), &proof, sink)?;
+
+        // Said out loud rather than left to the `delivered` field, which only the `--json` reader
+        // sees. A caller reading the one line would otherwise treat an unproven dispatch as a
+        // started one.
+        if !submission.proven && proof != Proof::None {
             sink.warn(&format!(
-                "{} was already working, so delivery could not be verified",
+                "{} was already working and its pane never showed the message, so delivery is unproven",
                 self.target
             ));
         }
 
-        let agent = deliver(&self.target, &self.text, &self.reply(), wait.as_ref(), sink)?;
-        Ok(Delivered { delivered: Some(verified), agent })
+        Ok(Delivered {
+            delivered: Some(submission.proven),
+            agent: submission.agent,
+        })
     }
 }
 
 // =====================================================================================================================
 // Delivery
 // =====================================================================================================================
+
+/// How one submission's delivery is to be proven.
+///
+/// An enum rather than the `Option<Wait>` this used to be, because the absent case had grown two
+/// meanings that call for opposite handling: a caller who asked for no proof, and a target for which
+/// herdr's kind of proof does not exist.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum Proof {
+    /// Nothing is checked, because `--no-verify` asked for nothing.
+    None,
+    /// herdr waits for a state change that only a delivered prompt could have produced.
+    Wait(Wait),
+    /// The target's pane is read for the id this message carries.
+    ///
+    /// The case herdr cannot answer. A `--until` state matches only once the agent's state-change
+    /// sequence has passed the submission's, and that sequence advances only when the status
+    /// actually changes — so an agent that was working before and is working after satisfies
+    /// nothing, however long it is given. The message is queued all the same, and the harness
+    /// renders it where it can be read.
+    Pane,
+}
+
+impl Proof {
+    /// The proof available for an ordinary delivery against a target in `current`.
+    ///
+    /// Shared with `spawn`, whose first prompt has exactly this problem: an agent that came up
+    /// working has no state change left for herdr to match either.
+    pub(super) fn for_delivery(current: &str, timeout: u64) -> Self {
+        if current == WORKING {
+            return Self::Pane;
+        }
+        Self::Wait(Wait {
+            until: vec![WORKING.to_owned()],
+            timeout,
+        })
+    }
+
+    /// The wait to hand herdr, absent for the two kinds of proof herdr does not perform.
+    fn wait(&self) -> Option<&Wait> {
+        match self {
+            Self::Wait(wait) => Some(wait),
+            Self::None | Self::Pane => None,
+        }
+    }
+}
+
+/// What one submission produced: herdr's record of the agent, and whether delivery was proven.
+///
+/// A named pair rather than a tuple because both halves cross a module boundary, and `spawn` reads
+/// them into differently named fields of its own result.
+pub(super) struct Submission {
+    /// herdr's record of the target after the submission.
+    pub agent: AgentRecord,
+    /// Whether delivery was actually proven, rather than merely attempted.
+    pub proven: bool,
+}
+
+/// Looks for `id` in the target's pane until it appears or the poll window closes.
+///
+/// This is the proof for a target that was already working. The harness renders a queued message
+/// where a reader can see it — Claude Code expands the whole body into its transcript, Codex lists it
+/// under a "messages to be submitted" banner — and both render the opening tag that carries the id.
+///
+/// The window is sized to the message, because the message is what pushed the transcript along: a
+/// hundred-line dispatch scrolls its own opening out of any fixed window. herdr clamps the request
+/// at [`DELIVERY_MAX_LINES`] regardless, so a message longer than that is read from its tail and the
+/// id may genuinely be gone — reported as unproven, which is the honest answer.
+///
+/// Never an error. A snapshot that cannot be read, or a harness whose rendering this build does not
+/// recognize, leaves delivery unproven rather than failing a prompt that did land — the same stance
+/// the composer guard takes when it cannot see what it needs.
+/// Takes the read as a closure for the reason [`harness::readiness`] does: it is what lets the whole
+/// decision be exercised without a herdr process, per the rule that automated tests never start one.
+fn confirm_in_pane<E>(id: &str, text: &NonEmptyText, read: impl Fn(&'static str, u32) -> Result<String, E>) -> bool {
+    let lines = delivery_window(text.lines().count());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(DELIVERY_POLL_MS);
+
+    loop {
+        match read(DELIVERY_SOURCE, lines) {
+            // The id is this build's own six digits, so a hit is this message rather than a
+            // quotation of an older one. The snapshot itself is never reported anywhere: it is the
+            // recipient's screen, and the prompt rule covers captured terminal content outright.
+            Ok(snapshot) if snapshot.contains(id) => return true,
+            Ok(_) => {}
+            // A read that failed says nothing about the prompt, and the answer here is the same
+            // either way. herdr's own message is not restated, because nothing acts on it.
+            Err(_) => return false,
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(DELIVERY_INTERVAL_MS));
+    }
+}
+
+/// How many rows to read back when looking for a delivered message.
+///
+/// Sized to the message, because the message is what pushed the transcript along: a hundred-line
+/// dispatch scrolls its own opening tag out of any fixed window, and the opening tag is where the id
+/// rides. herdr clamps a read at a thousand rows whatever is asked for, so a message longer than that
+/// is read from its tail and its id may genuinely be gone — reported unproven, which is honest.
+/// Takes the line count rather than the message, which is all it is about. RS-030 would otherwise
+/// make this a method on `NonEmptyText`, dragging this command's read policy into `core` — the
+/// module the style guide keeps free of every other module's vocabulary.
+fn delivery_window(message_lines: usize) -> u32 {
+    u32::try_from(message_lines)
+        .unwrap_or(DELIVERY_MAX_LINES)
+        .saturating_add(DELIVERY_MARGIN)
+        .min(DELIVERY_MAX_LINES)
+}
 
 /// Submits a prompt, re-sending once if herdr reports it did not land.
 ///
@@ -191,15 +318,18 @@ pub(super) fn deliver(
     target: &str,
     text: &NonEmptyText,
     reply: &Reply,
-    wait: Option<&Wait>,
+    proof: &Proof,
     sink: &Sink,
-) -> Result<AgentRecord, PromptError> {
+) -> Result<Submission, PromptError> {
     // Resolved and rendered once, before the re-send: a second submission must deliver the same
-    // bytes as the first, and re-resolving would make a second `agent get` call to say so.
-    let text = NonEmptyText::composed(Envelope::resolve(reply, sink).wrap(text));
+    // bytes as the first, and re-resolving would make a second `agent get` call to say so — and mint
+    // a second id, leaving the pane check hunting for a token no delivered copy carries.
+    let envelope = Envelope::resolve(reply, sink);
+    let text = NonEmptyText::composed(envelope.wrap(text));
+    let wait = proof.wait();
 
-    match agent::prompt(target, &text, wait) {
-        Ok(agent) => Ok(agent),
+    let agent = match agent::prompt(target, &text, wait) {
+        Ok(agent) => agent,
         Err(error) if error.is_undelivered() => {
             sink.warn(&format!("{target} did not acknowledge the prompt; re-sending once"));
             agent::prompt(target, &text, wait).map_err(|error| {
@@ -208,10 +338,22 @@ pub(super) fn deliver(
                 } else {
                     PromptError::Herdr(error)
                 }
-            })
+            })?
         }
-        Err(error) => Err(PromptError::Herdr(error)),
-    }
+        Err(error) => return Err(PromptError::Herdr(error)),
+    };
+
+    // A returned wait is a matched wait: herdr answers the states it was given or it errors, so
+    // there is nothing left to check for that arm.
+    let proven = match proof {
+        Proof::None => false,
+        Proof::Wait(_) => true,
+        Proof::Pane => confirm_in_pane(envelope.id(), &text, |source, lines| {
+            agent::read(target, source, "text", lines)
+        }),
+    };
+
+    Ok(Submission { agent, proven })
 }
 
 // =====================================================================================================================
@@ -306,13 +448,21 @@ mod tests {
         serde_json::from_str(r#"{"agent":"claude","agent_status":"working","pane_id":"w4:p17"}"#).unwrap()
     }
 
+    /// The wait inside a proof, for the arms that carry one.
+    fn waited(proof: &Proof) -> &Wait {
+        match proof {
+            Proof::Wait(wait) => wait,
+            other => panic!("expected a wait, got {other:?}"),
+        }
+    }
+
     #[test]
-    fn the_default_wait_proves_delivery_by_the_status_moving_to_working() {
+    fn the_default_proof_is_a_wait_for_the_status_moving_to_working() {
         let args = parse(&["prompt", "reviewer", "ship it"]);
 
-        let wait = args.wait("idle").expect("verification is on by default");
-        assert_eq!(wait.until, [WORKING]);
-        assert_eq!(wait.timeout, 15_000);
+        let proof = args.proof("idle");
+        assert_eq!(waited(&proof).until, [WORKING]);
+        assert_eq!(waited(&proof).timeout, 15_000);
     }
 
     /// The bug this shape exists to prevent.
@@ -322,13 +472,33 @@ mod tests {
     /// before and after never satisfies `--until working`, so asking spends the whole timeout and
     /// then calls a delivered prompt undelivered.
     #[test]
-    fn the_default_wait_is_dropped_for_a_target_that_is_already_working() {
+    fn a_target_that_is_already_working_is_proven_by_its_pane_rather_than_by_a_wait() {
         let args = parse(&["prompt", "reviewer", "ship it"]);
 
-        assert!(args.wait(WORKING).is_none(), "no state change is left to observe");
-        assert!(args.wait("idle").is_some());
-        assert!(args.wait("blocked").is_some());
-        assert!(args.wait("done").is_some());
+        assert_eq!(args.proof(WORKING), Proof::Pane, "no state change is left to observe");
+        for settled in ["idle", "blocked", "done"] {
+            assert!(matches!(args.proof(settled), Proof::Wait(_)), "{settled}");
+        }
+    }
+
+    /// `spawn`'s first prompt takes the same route, so the rule has one owner.
+    #[test]
+    fn the_delivery_proof_is_chosen_the_same_way_wherever_it_is_asked_for() {
+        assert_eq!(Proof::for_delivery(WORKING, 10_000), Proof::Pane);
+        assert_eq!(
+            Proof::for_delivery("idle", 10_000),
+            Proof::Wait(Wait {
+                until: vec![WORKING.to_owned()],
+                timeout: 10_000
+            })
+        );
+    }
+
+    #[test]
+    fn only_a_wait_is_handed_to_herdr_and_the_other_two_arms_submit_bare() {
+        assert!(Proof::None.wait().is_none());
+        assert!(Proof::Pane.wait().is_none());
+        assert!(Proof::for_delivery("idle", 10_000).wait().is_some());
     }
 
     /// An explicit `--wait-until` is a question about a transition, not about delivery.
@@ -338,8 +508,8 @@ mod tests {
         // transition really does happen — so dropping it here would break the settle wait.
         let args = parse(&["prompt", "reviewer", "go", "--wait-until", "idle"]);
 
-        let wait = args.wait(WORKING).expect("the caller asked for a transition");
-        assert_eq!(wait.until, ["idle"]);
+        let proof = args.proof(WORKING);
+        assert_eq!(waited(&proof).until, ["idle"]);
     }
 
     #[test]
@@ -354,20 +524,22 @@ mod tests {
             "blocked",
         ]);
 
-        let wait = args.wait("idle").expect("still verifying, just for different states");
-        assert_eq!(wait.until, ["idle", "blocked"]);
+        let proof = args.proof("idle");
+        assert_eq!(waited(&proof).until, ["idle", "blocked"]);
     }
 
     #[test]
     fn no_verify_skips_the_wait_and_force_does_not() {
         // The two flags are not interchangeable and neither implies the other: --force skips the
         // composer guard, --no-verify skips the delivery wait.
-        assert!(
-            parse(&["prompt", "reviewer", "go", "--no-verify"])
-                .wait("idle")
-                .is_none()
+        assert_eq!(
+            parse(&["prompt", "reviewer", "go", "--no-verify"]).proof("idle"),
+            Proof::None
         );
-        assert!(parse(&["prompt", "reviewer", "go", "--force"]).wait("idle").is_some());
+        assert!(matches!(
+            parse(&["prompt", "reviewer", "go", "--force"]).proof("idle"),
+            Proof::Wait(_)
+        ));
         assert!(!parse(&["prompt", "reviewer", "go", "--force"]).guarded());
         assert!(parse(&["prompt", "reviewer", "go", "--no-verify"]).guarded());
     }
@@ -409,7 +581,7 @@ mod tests {
         // --no-reply shapes the message; --no-verify skips the delivery wait; --force skips the
         // composer guard. No one of them implies another.
         let args = parse(&["prompt", "reviewer", "go", "--no-reply"]);
-        assert!(args.wait("idle").is_some());
+        assert!(matches!(args.proof("idle"), Proof::Wait(_)));
         assert!(args.guarded());
     }
 
@@ -454,6 +626,75 @@ mod tests {
     #[test]
     fn a_blank_prompt_is_refused_at_parse_time() {
         assert!(Harness::try_parse_from(["prompt", "reviewer", "   "]).is_err());
+    }
+
+    /// The window is sized to the message, which is what scrolled the transcript in the first place.
+    #[test]
+    fn the_read_window_covers_the_message_plus_room_for_the_harness_furniture() {
+        assert_eq!(delivery_window(1), 1 + DELIVERY_MARGIN);
+        assert_eq!(delivery_window(100), 100 + DELIVERY_MARGIN);
+
+        // herdr clamps a read at a thousand rows whatever is asked for, so asking for more would
+        // only misreport how much was actually looked at.
+        assert_eq!(delivery_window(5_000), DELIVERY_MAX_LINES);
+        assert_eq!(
+            delivery_window(usize::MAX),
+            DELIVERY_MAX_LINES,
+            "no wrap on the way past u32"
+        );
+    }
+
+    /// The id in the snapshot is the proof, and it is read from the source that can actually hold it.
+    #[test]
+    fn a_pane_showing_the_id_is_delivery_proven() {
+        let text = NonEmptyText::composed("<mail from=\"dispatcher\" id=\"k7m2x9\">\ngo\n</mail>".to_owned());
+        let asked = std::cell::RefCell::new(Vec::new());
+
+        let found = confirm_in_pane("k7m2x9", &text, |source, lines| {
+            asked.borrow_mut().push((source, lines));
+            Ok::<_, ()>("… transcript …\n  <mail from=\"dispatcher\" id=\"k7m2x9\">\n  go\n".to_owned())
+        });
+
+        assert!(found);
+        assert_eq!(
+            asked.into_inner(),
+            [("recent-unwrapped", 3 + DELIVERY_MARGIN)],
+            "one read, from the source that rejoins wrapped rows"
+        );
+    }
+
+    /// A read this build cannot make leaves delivery unproven rather than failing a landed prompt.
+    #[test]
+    fn a_pane_that_cannot_be_read_is_unproven_rather_than_an_error() {
+        let text = NonEmptyText::composed("<mail from=\"w4:p2\" id=\"abc123\">\ngo\n</mail>".to_owned());
+
+        assert!(!confirm_in_pane("abc123", &text, |_, _| Err::<String, _>(())));
+    }
+
+    /// An id belonging to some earlier message is not this message's proof.
+    ///
+    /// The id is what is matched, not the tag around it — a pane full of mail from the same sender
+    /// proves nothing about the message just sent.
+    #[test]
+    fn a_pane_holding_only_an_older_message_is_not_proof_of_this_one() {
+        let text = NonEmptyText::composed("<mail from=\"w\" id=\"newone\">\ngo\n</mail>".to_owned());
+        let stale = "  <mail from=\"w\" id=\"oldone\">\n  an earlier dispatch\n";
+        let looked = std::cell::Cell::new(0_u32);
+
+        // The second look fails rather than missing again, which ends the poll after one interval.
+        // Spending the whole window here would put three seconds into every run of the suite to
+        // re-assert what the first miss already showed.
+        let found = confirm_in_pane("newone", &text, |_, _| {
+            looked.set(looked.get() + 1);
+            if looked.get() == 1 {
+                Ok(stale.to_owned())
+            } else {
+                Err(())
+            }
+        });
+
+        assert!(!found);
+        assert_eq!(looked.get(), 2, "the first miss should not have been the last look");
     }
 
     #[test]
