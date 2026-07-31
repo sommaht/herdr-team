@@ -19,7 +19,7 @@ use clap::error::{ContextKind, ContextValue, ErrorKind};
 use clap::{CommandFactory, Parser, Subcommand};
 use thiserror::Error;
 
-use crate::cmd::{AsExitStatus, Cmd, ExitStatus, Failure, KillArgs, PresetsArgs, PrimeArgs, PromptArgs, SpawnArgs};
+use crate::cmd::{AgentsArgs, AsExitStatus, Cmd, ExitStatus, Failure, KillArgs, PrimeArgs, PromptArgs, SpawnArgs};
 use crate::core::{OutputMode, Sink};
 
 // =====================================================================================================================
@@ -35,9 +35,9 @@ use crate::core::{OutputMode, Sink};
         \n\
         herdr starts an agent only in a pane that already exists and is sitting at an interactive \
         shell prompt, so launching one by hand is two steps. `spawn` does both: it creates a pane, \
-        tab, or workspace, reads back the new pane's id, and starts a preset-configured agent in \
-        it. `prompt` delivers text to an agent that already exists, `kill` closes an agent's pane \
-        unless it is mid-task, and `presets` lists what the config file holds.\n\
+        tab, or workspace, reads back the new pane's id, and starts a configured agent in it. \
+        `prompt` delivers text to an agent that already exists, `kill` closes an agent's pane \
+        unless it is mid-task, and `agents` lists what the config holds.\n\
         \n\
         Run `herdr-agent-tools <command> --help` for details and examples.",
     after_help = "Exit codes:\n  \
@@ -67,7 +67,7 @@ enum Command {
     Spawn(SpawnArgs),
     Prompt(PromptArgs),
     Kill(KillArgs),
-    Presets(PresetsArgs),
+    Agents(AgentsArgs),
     Prime(PrimeArgs),
 }
 
@@ -87,7 +87,7 @@ fn main() -> ExitCode {
                 Command::Spawn(args) => run(args, &sink),
                 Command::Prompt(args) => run(args, &sink),
                 Command::Kill(args) => run(args, &sink),
-                Command::Presets(args) => run(args, &sink),
+                Command::Agents(args) => run(args, &sink),
                 Command::Prime(args) => run(args, &sink),
             }
         }
@@ -434,9 +434,9 @@ mod tests {
     /// The mode a rejection renders in has to be recovered from argv, since nothing parsed.
     #[test]
     fn the_json_flag_is_recovered_from_argv_wherever_it_sits() {
-        assert!(json_requested(argv(&["herdr-agent-tools", "--json", "presets"])));
-        assert!(json_requested(argv(&["herdr-agent-tools", "presets", "--json"])));
-        assert!(!json_requested(argv(&["herdr-agent-tools", "presets"])));
+        assert!(json_requested(argv(&["herdr-agent-tools", "--json", "agents"])));
+        assert!(json_requested(argv(&["herdr-agent-tools", "agents", "--json"])));
+        assert!(!json_requested(argv(&["herdr-agent-tools", "agents"])));
     }
 
     /// Neither of the two places `--json` may appear as data is read as the flag.

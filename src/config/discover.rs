@@ -50,10 +50,6 @@ impl UserPath {
     }
 
     /// Whether the caller named it, which decides whether its absence is a failure.
-    // Declared before the loader that asks: `Config::load` is where the distinction is acted on.
-    // `expect` so the compiler takes the attribute back off us once it is, and `not(test)` because
-    // the tests below already exercise it.
-    #[cfg_attr(not(test), expect(dead_code))]
     pub fn named(&self) -> bool {
         matches!(self, Self::Named(_))
     }
@@ -94,8 +90,6 @@ pub fn user(
 /// It does not stop at a repository boundary. Locating one is a herdr call this crate makes only for
 /// worktree spawns, and paying for it on every load — to refuse a file the caller placed on purpose —
 /// buys nothing.
-// Declared before the loader that asks, for the reason [`UserPath::named`] carries the same note.
-#[cfg_attr(not(test), expect(dead_code))]
 pub fn repository(cwd: &Path) -> Option<PathBuf> {
     cwd.ancestors()
         .map(|directory| directory.join(REPOSITORY_PATH))
