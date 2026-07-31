@@ -3,8 +3,9 @@
 //! The only disk I/O in the crate, which is the boundary this module names. Nothing here is loaded
 //! eagerly: `prompt` never reads a preset, and a malformed file must not break it.
 
+mod discover;
+
 use std::collections::BTreeMap;
-use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use getter_methods::Getters;
@@ -19,17 +20,6 @@ use crate::cmd::ExitStatus;
 
 /// The environment variable that overrides where the preset file is looked for.
 const PATH_VARIABLE: &str = "HERDR_AGENT_TOOLS_CONFIG";
-
-/// Where the file sits under a config directory.
-///
-/// This tool's own directory, not a second file inside herdr's: a public tool should not squat a
-/// filename in another project's config directory, where it would break the day that project
-/// claims the name.
-///
-/// Named `config.toml` rather than `presets.toml` because presets are what it holds *today*.
-/// A filename that names one table is a filename that has to change the first time a second
-/// table is added, and renaming a config file is a breaking change for everyone who has one.
-const RELATIVE_PATH: &str = "herdr-agent-tools/config.toml";
 
 /// What a working preset file looks like, quoted back when none was found.
 const EXAMPLE: &str = "\
@@ -90,8 +80,10 @@ impl Presets {
         let environment = std::env::var_os(PATH_VARIABLE);
         let xdg = std::env::var_os("XDG_CONFIG_HOME");
         let home = std::env::var_os("HOME");
-        let path = discover(explicit, environment.as_deref(), xdg.as_deref(), home.as_deref())
-            .ok_or(ConfigError::NoConfigDir)?;
+        let path = discover::user(explicit, environment.as_deref(), xdg.as_deref(), home.as_deref())
+            .ok_or(ConfigError::NoConfigDir)?
+            .path()
+            .to_owned();
 
         let contents = match std::fs::read_to_string(&path) {
             Ok(contents) => contents,
@@ -186,33 +178,6 @@ impl ConfigError {
             Self::NoConfigDir | Self::Unreadable { .. } | Self::Malformed { .. } => ExitStatus::Failure,
         }
     }
-}
-
-// =====================================================================================================================
-// Helpers
-// =====================================================================================================================
-
-/// Where the preset file is looked for, in order: `--config`, the environment override,
-/// `$XDG_CONFIG_HOME`, then `~/.config`.
-///
-/// Pure, with the environment passed in, so the search order is testable without setting process
-/// environment variables that leak between tests.
-fn discover(
-    explicit: Option<&Path>,
-    environment: Option<&OsStr>,
-    xdg: Option<&OsStr>,
-    home: Option<&OsStr>,
-) -> Option<PathBuf> {
-    if let Some(path) = explicit {
-        return Some(path.to_owned());
-    }
-    if let Some(path) = environment {
-        return Some(PathBuf::from(path));
-    }
-    if let Some(directory) = xdg {
-        return Some(Path::new(directory).join(RELATIVE_PATH));
-    }
-    home.map(|directory| Path::new(directory).join(".config").join(RELATIVE_PATH))
 }
 
 // =====================================================================================================================
@@ -312,38 +277,5 @@ kind = 'codex'
             error.to_string().contains("[presets.reviewer]"),
             "the message carries the example"
         );
-    }
-
-    #[test]
-    fn the_search_order_is_explicit_then_the_environment_then_xdg_then_home() {
-        let explicit = PathBuf::from("/explicit/config.toml");
-
-        assert_eq!(
-            discover(
-                Some(&explicit),
-                Some("/env".as_ref()),
-                Some("/xdg".as_ref()),
-                Some("/home".as_ref())
-            ),
-            Some(explicit.clone())
-        );
-        assert_eq!(
-            discover(
-                None,
-                Some("/env/p.toml".as_ref()),
-                Some("/xdg".as_ref()),
-                Some("/home".as_ref())
-            ),
-            Some(PathBuf::from("/env/p.toml"))
-        );
-        assert_eq!(
-            discover(None, None, Some("/xdg".as_ref()), Some("/home".as_ref())),
-            Some(PathBuf::from("/xdg/herdr-agent-tools/config.toml"))
-        );
-        assert_eq!(
-            discover(None, None, None, Some("/home".as_ref())),
-            Some(PathBuf::from("/home/.config/herdr-agent-tools/config.toml"))
-        );
-        assert_eq!(discover(None, None, None, None), None);
     }
 }
