@@ -146,11 +146,6 @@ pub trait AgentHarness: std::fmt::Debug {
     ///
     /// A kind absent from [`HARNESSES`] has no answer at all, which is why the config layer drops an
     /// agent that asks for these under one rather than starting it without them.
-    // The declaration lands before its caller does: the config layer's `Agent::agent_args` is what
-    // asks, and the tests here already do. `expect` rather than `allow` so the compiler takes this
-    // attribute back off us — an unfulfilled expectation is itself a warning the moment that caller
-    // exists — and `not(test)` because under `cfg(test)` the expectation is already unfulfilled.
-    #[cfg_attr(not(test), expect(dead_code))]
     fn tuning(&self, model: Option<&str>, effort: Option<&str>) -> Vec<String>;
 
     /// What this harness needs read in order to answer.

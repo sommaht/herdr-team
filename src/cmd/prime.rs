@@ -12,8 +12,8 @@
 //!
 //! Hand-written means drift is possible, so three tests hold it honest: the commands and flags it names
 //! must exist, the commands that exist must be named, and the exit codes it teaches must be the ones
-//! the contract reports. The preset table is generated outright, from the same listing `presets`
-//! prints, so it cannot disagree with what `spawn --preset` will do.
+//! the contract reports. The agent table is generated outright, from the same listing `agents`
+//! prints, so it cannot disagree with what `spawn --agent` will do.
 //!
 //! `--hook <harness>` asks the named harness to wrap the brief for its host. This module never learns
 //! the envelope's shape.
@@ -26,8 +26,8 @@ use serde::Serialize;
 use thiserror::Error;
 
 use crate::cmd::Cmd;
-use crate::cmd::presets::PresetList;
-use crate::config::Presets;
+use crate::cmd::agents::AgentList;
+use crate::config::Config;
 use crate::core::Sink;
 use crate::harness::{self, AgentHarness};
 
@@ -66,12 +66,13 @@ the output rather than you reading it. `prime` is the one exception: its brief i
     spawn <name> --placement workspace    give it a workspace of its own
     spawn <name> --placement worktree     a Git worktree of its own, on a new branch
     spawn <name> --branch <name>          name that branch; otherwise herdr picks
-    spawn <name> --preset <preset>        pick which agent starts; see Presets below
+    spawn <name> --agent <agent>          pick which agent starts; see Agents below
     spawn <name> --prompt \"<text>\"        deliver a first prompt once it is up
     spawn <name> --prompt -               read that first prompt from stdin
+    spawn <name> --agent <agent>          an agent may carry a brief; it precedes your prompt
     spawn <name> --cwd <path>             start it somewhere other than here
     spawn <name> --focus                  move the cursor to it; off by default
-    spawn <name> -- <agent args>          extra args, appended after the preset's
+    spawn <name> -- <agent args>          extra args, appended after the config's
 
 ## Prompting agents
 
@@ -114,7 +115,7 @@ The envelope is legible, not authentic: a body is delivered verbatim, so it can 
 
 ## Reference
 
-    presets                               list what the preset config holds
+    agents                                list what the config holds
     prime                                 print this brief again; text in both modes
 
 ## Two refusals you will meet
@@ -164,7 +165,7 @@ its result, so select the result instead of taking the first line:
 
 /// Print a brief on driving this CLI, for a session-start hook to feed an agent.
 ///
-/// Makes no herdr call and cannot fail: a config it cannot read costs the preset table and nothing
+/// Makes no herdr call and cannot fail: a config it cannot read costs the agent table and nothing
 /// else.
 ///
 /// This is the crate's one `--json` exception. The brief is a document rather than a record, so
@@ -178,7 +179,7 @@ its result, so select the result instead of taking the first line:
     \n\
     --json prints this same text: the brief is a document, not a record.")]
 pub struct PrimeArgs {
-    /// Read this preset file instead of the one in the config directory.
+    /// Read this config file instead of the one in the config directory.
     #[arg(long, value_name = "PATH")]
     config: Option<PathBuf>,
 
@@ -221,20 +222,21 @@ impl Cmd for PrimeArgs {
     /// The crate's one `--json` exception. A brief is a document, so both modes print it.
     const TEXT_IN_BOTH_MODES: bool = true;
 
-    fn execute(self, _sink: &Sink) -> Result<Self::Ok, Self::Err> {
+    fn execute(self, sink: &Sink) -> Result<Self::Ok, Self::Err> {
         // The one place a `ConfigError` is deliberately dropped rather than reported. A hook fires
         // before anyone has necessarily written a config, and failing there would cost the whole
-        // brief to say something the brief itself already says.
-        let presets = Presets::load(self.config.as_deref())
+        // brief to say something the brief itself already says. The warnings a partly-broken config
+        // produces still reach the sink, which is the one thing worth saying here.
+        let agents = Config::load(self.config.as_deref(), None, sink)
             .ok()
-            .map(|presets| PresetList::of(&presets));
+            .map(|config| AgentList::of(&config));
         // Resolved here rather than carried as a name, so `Display` has nothing left to look up.
         // `expect` is safe because `known_harness` rejected anything `by_kind` cannot resolve.
         let host = self
             .hook
             .as_deref()
             .map(|kind| harness::by_kind(kind).expect("the value parser accepted this harness"));
-        Ok(Brief { guidance: GUIDANCE, presets, host })
+        Ok(Brief { guidance: GUIDANCE, agents, host })
     }
 }
 
@@ -247,9 +249,9 @@ impl Cmd for PrimeArgs {
 pub struct Brief {
     /// The brief itself, verbatim.
     guidance: &'static str,
-    /// The preset table, absent when no config could be read.
+    /// The agent table, absent when no config could be read.
     #[serde(skip_serializing_if = "Option::is_none")]
-    presets: Option<PresetList>,
+    agents: Option<AgentList>,
     /// The host to wrap for, absent when the brief is printed bare.
     ///
     /// Skipped on the wire: a trait object has nothing to serialize, and `--hook` is a framing choice
@@ -280,15 +282,15 @@ impl Display for Brief {
 }
 
 impl Brief {
-    /// The brief as text: the guidance, then the preset table.
+    /// The brief as text: the guidance, then the agent table.
     ///
     /// Shared by both forms, because the hook envelope carries exactly what a reader would have seen.
     fn text(&self) -> String {
-        match &self.presets {
-            Some(presets) => format!("{}\n\n## Presets\n\n{presets}", self.guidance),
-            // Said rather than omitted: an agent that knows presets exist and sees none knows not to
-            // reach for `--preset`.
-            None => format!("{}\n\n## Presets\n\nNone configured.", self.guidance),
+        match &self.agents {
+            Some(agents) => format!("{}\n\n## Agents\n\n{agents}", self.guidance),
+            // Said rather than omitted: an agent that knows agents exist and sees none knows not to
+            // reach for `--agent`.
+            None => format!("{}\n\n## Agents\n\nNone configured.", self.guidance),
         }
     }
 }
@@ -365,7 +367,7 @@ mod tests {
         // The hook constraint: firing before anyone wrote a config must still produce the brief.
         let brief = rendered();
 
-        assert!(brief.contains("## Presets\n\nNone configured."), "got {brief}");
+        assert!(brief.contains("## Agents\n\nNone configured."), "got {brief}");
         assert!(brief.contains("## Launching agents"), "the brief survived");
     }
 
@@ -544,7 +546,7 @@ mod tests {
     fn the_wire_form_carries_the_brief_and_the_generated_table_separately() {
         let brief = Brief {
             guidance: "the brief",
-            presets: None,
+            agents: None,
             host: None,
         };
 

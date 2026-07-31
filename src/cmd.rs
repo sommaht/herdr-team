@@ -2,14 +2,14 @@
 //!
 //! There is deliberately no parent grouping: these siblings share no distinction a parent would mark.
 
+mod agents;
 mod kill;
-mod presets;
 mod prime;
 mod prompt;
 mod spawn;
 
+pub use agents::AgentsArgs;
 pub use kill::KillArgs;
-pub use presets::PresetsArgs;
 pub use prime::PrimeArgs;
 pub use prompt::PromptArgs;
 pub use spawn::SpawnArgs;

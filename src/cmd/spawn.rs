@@ -1,4 +1,4 @@
-//! `spawn` — create a surface and start a preset-configured agent in it.
+//! `spawn` — create a surface and start a configured agent in it.
 //!
 //! The longest file here because it is the longest command: five ordered steps across four
 //! placements, each of which can fail after the previous one has already changed something in herdr.
@@ -20,7 +20,7 @@ use thiserror::Error;
 use crate::cmd::prompt::deliver;
 use crate::cmd::prompt::envelope::{OPERATOR, Reply};
 use crate::cmd::{AsExitStatus, Cmd, ExitStatus};
-use crate::config::{ConfigError, Presets};
+use crate::config::{Config, ConfigError};
 use crate::core::{AgentName, Backoff, NonEmptyText, PaneId, Sink};
 use crate::herdr::agent::{self, AgentRecord, WORKING, Wait};
 use crate::herdr::surface::{self, Checkout, Focus, Placement};
@@ -41,17 +41,17 @@ const DEFAULT_SETTLE_MS: u64 = 10_000;
 // Spawn Args
 // =====================================================================================================================
 
-/// Create a pane, tab, or workspace and start a preset-configured agent in it.
+/// Create a pane, tab, or workspace and start a configured agent in it.
 ///
 /// herdr starts an agent only in a pane that already exists and is sitting at an interactive shell
 /// prompt, so this does both halves: it creates the surface, reads back the new pane's id, and
 /// starts the agent there.
 #[derive(Debug, Args)]
 #[command(after_help = "Examples:\n  \
-    herdr-agent-tools spawn reviewer --placement tab --preset opus\n  \
-    herdr-agent-tools spawn fixer --preset sonnet --prompt \"Fix the flaky tests\"\n  \
+    herdr-agent-tools spawn reviewer --placement tab --agent opus\n  \
+    herdr-agent-tools spawn fixer --agent sonnet --prompt \"Fix the flaky tests\"\n  \
     git diff | herdr-agent-tools spawn reviewer --prompt -\n  \
-    herdr-agent-tools spawn big --placement workspace --preset fable -- --resume\n  \
+    herdr-agent-tools spawn big --placement workspace --agent fable -- --resume\n  \
     herdr-agent-tools spawn fixer --placement worktree --branch worktree/flake-fix")]
 pub struct SpawnArgs {
     /// The agent's name; must satisfy herdr's rule, which is checked before anything is created.
@@ -75,11 +75,17 @@ pub struct SpawnArgs {
     #[arg(long, value_name = "REF")]
     base: Option<String>,
 
-    /// The preset to start; defaults to the config file's `default`.
+    /// The agent to start; defaults to the config's `default`.
     #[arg(long, value_name = "NAME")]
+    agent: Option<String>,
+
+    /// Renamed to `--agent`; declared only so the rename can be reported rather than guessed at.
+    #[arg(long, value_name = "NAME", hide = true)]
     preset: Option<String>,
 
-    /// Read this preset file instead of the one in the config directory.
+    /// Read this config file instead of the one in the config directory.
+    ///
+    /// The repository's `.herdr-agent-tools/config.toml` is still merged over it.
     #[arg(long, value_name = "PATH")]
     config: Option<PathBuf>,
 
@@ -111,10 +117,10 @@ pub struct SpawnArgs {
     #[arg(long, value_name = "MS", default_value_t = DEFAULT_SETTLE_MS)]
     settle_timeout: u64,
 
-    /// Extra arguments appended after the preset's, passed to the agent verbatim.
+    /// Extra arguments appended after the agent's, passed to the agent verbatim.
     ///
-    /// No merging and no de-duplication, so the agent's own last-flag-wins rules settle any
-    /// conflict with the preset.
+    /// No merging and no de-duplication, so the agent's own last-flag-wins rules settle any conflict
+    /// with the config.
     #[arg(last = true, value_name = "AGENT_ARG")]
     agent_args: Vec<String>,
 }
@@ -207,6 +213,22 @@ impl SpawnArgs {
         Ok(())
     }
 
+    /// Refuses a flag this build renamed, naming what replaced it.
+    ///
+    /// Not left to clap: its suggestion machinery scores `--preset` too far from `--agent` to offer
+    /// it, so the rejection a caller would otherwise meet says only that the argument is
+    /// unrecognized.
+    ///
+    /// # Errors
+    ///
+    /// [`SpawnError::RenamedFlag`].
+    fn check_renamed_flags(&self) -> Result<(), SpawnError> {
+        if self.preset.is_some() {
+            return Err(SpawnError::RenamedFlag { old: "--preset", new: "--agent" });
+        }
+        Ok(())
+    }
+
     /// Makes the surface this placement calls for, and reports the checkout when it made one.
     ///
     /// Named rather than inlined into [`execute`](Cmd::execute) because it is the one step with a
@@ -258,29 +280,40 @@ impl Cmd for SpawnArgs {
     type Ok = Spawned;
     type Err = SpawnError;
 
-    /// Pre-checks, preset, surface, agent, first prompt — in that order, because a pre-check that
+    /// Pre-checks, config, surface, agent, first prompt — in that order, because a pre-check that
     /// runs after a surface exists is not a pre-check.
     fn execute(self, sink: &Sink) -> Result<Self::Ok, Self::Err> {
         // `AgentName` derefs to `str`, so this compares the name itself rather than the newtype.
         if &*self.name == OPERATOR {
             return Err(SpawnError::ReservedName);
         }
+        self.check_renamed_flags()?;
         self.check_worktree_flags()?;
         let anchor = match self.placement {
             Placement::Pane => Some(anchor(std::env::var(PANE_VARIABLE).ok().as_deref())?),
             Placement::Tab | Placement::Workspace | Placement::Worktree => None,
         };
 
-        let presets = Presets::load(self.config.as_deref())?;
-        let preset = presets.resolve(self.preset.as_deref())?;
-        let kind = preset.kind().to_owned();
-        let mut agent_args = preset.args().to_vec();
-        agent_args.extend(self.agent_args.iter().cloned());
-
+        // Resolved before the config, because it is where the repository layer's walk starts: the
+        // config that applies is the one belonging to the tree this agent will work in.
         let cwd = match &self.cwd {
             Some(path) => path.clone(),
             None => std::env::current_dir().map_err(SpawnError::NoWorkingDirectory)?,
         };
+
+        // `as_path`, not `&cwd`: `Option<&PathBuf>` does not coerce to `Option<&Path>`.
+        let config = Config::load(self.config.as_deref(), Some(cwd.as_path()), sink)?;
+        let agent = config.resolve(self.agent.as_deref())?;
+        let mut args = agent.agent_args();
+        args.extend(self.agent_args.iter().cloned());
+        let configured = Configured {
+            kind: agent.kind().to_owned(),
+            args,
+            // Read here, among the other pre-checks: a missing brief is refused while a refusal is
+            // still free, rather than after a surface exists.
+            brief: agent.brief()?,
+        };
+
         let cwd = cwd.to_string_lossy().into_owned();
 
         // Read before anything is created, so a caller outside a repository is refused while a
@@ -293,9 +326,22 @@ impl Cmd for SpawnArgs {
         // From here on a failure leaves the pane open and names it: whatever went wrong is on
         // screen in it, and closing it would throw the error away with it. Every step past this
         // point is inside one call, so that note has one owner rather than a wrapper per step.
-        self.start_and_prompt(&pane, &kind, &agent_args, worktree, subdirectory.as_deref(), sink)
+        self.start_and_prompt(&pane, &configured, worktree, subdirectory.as_deref(), sink)
             .map_err(|error| error.note_open_pane(&pane))
     }
+}
+
+/// What the config settled for this spawn.
+///
+/// One value rather than three parameters, because they are one answer — the agent `--agent` named,
+/// resolved — and they are read together at the single call site that starts it.
+struct Configured {
+    /// The agent kind, passed to `agent start --kind` untouched.
+    kind: String,
+    /// The exact argument vector, the caller's `-- <extra>` already appended.
+    args: Vec<String>,
+    /// The agent's brief, which precedes the caller's first prompt.
+    brief: Option<NonEmptyText>,
 }
 
 impl SpawnArgs {
@@ -307,8 +353,7 @@ impl SpawnArgs {
     fn start_and_prompt(
         &self,
         pane: &PaneId,
-        kind: &str,
-        agent_args: &[String],
+        configured: &Configured,
         worktree: Option<Checkout>,
         subdirectory: Option<&str>,
         sink: &Sink,
@@ -319,9 +364,11 @@ impl SpawnArgs {
             self.open_subdirectory(pane, &checkout.path, relative, sink)?;
         }
 
-        let started = self.start_when_settled(pane, kind, agent_args)?;
+        let started = self.start_when_settled(pane, &configured.kind, &configured.args)?;
 
-        let Some(text) = &self.prompt else {
+        // The agent's configured brief and the caller's `--prompt` are one message: an agent that got
+        // two would answer the first before hearing the second.
+        let Some(text) = first_prompt(configured.brief.as_ref(), self.prompt.as_deref()) else {
             return Ok(Spawned {
                 placement: self.placement,
                 delivered: None,
@@ -349,7 +396,7 @@ impl SpawnArgs {
             ));
         }
 
-        let agent = deliver(pane, text, &self.reply(), Some(&wait), sink)?;
+        let agent = deliver(pane, &text, &self.reply(), Some(&wait), sink)?;
         Ok(Spawned {
             placement: self.placement,
             delivered: Some(verified),
@@ -531,7 +578,15 @@ pub enum SpawnError {
         /// The flag that cannot be honored here.
         flag: &'static str,
     },
-    /// The preset file could not be read, or did not hold the named preset.
+    /// A flag this build renamed.
+    #[error("{old} is now {new}")]
+    RenamedFlag {
+        /// What the caller typed.
+        old: &'static str,
+        /// What it is called now.
+        new: &'static str,
+    },
+    /// The config could not be read, or did not hold the named agent.
     #[error(transparent)]
     Config(#[from] ConfigError),
     /// There is no current directory to hand the new surface.
@@ -578,7 +633,9 @@ impl SpawnError {
 impl AsExitStatus for SpawnError {
     fn exit_status(&self) -> ExitStatus {
         match self {
-            Self::MissingAnchor | Self::WorktreeOnlyFlag { .. } | Self::ReservedName => ExitStatus::Usage,
+            Self::MissingAnchor | Self::WorktreeOnlyFlag { .. } | Self::RenamedFlag { .. } | Self::ReservedName => {
+                ExitStatus::Usage
+            }
             Self::Config(error) => error.exit_status_hint(),
             Self::NoWorkingDirectory(_) => ExitStatus::Failure,
             Self::Herdr(error) => error.exit_status(),
@@ -595,6 +652,7 @@ impl AsExitStatus for SpawnError {
             Self::AfterSurface { error, .. } => error.herdr(),
             Self::MissingAnchor
             | Self::WorktreeOnlyFlag { .. }
+            | Self::RenamedFlag { .. }
             | Self::ReservedName
             | Self::Config(_)
             | Self::NoWorkingDirectory(_)
@@ -622,6 +680,21 @@ fn anchor(variable: Option<&str>) -> Result<PaneId, SpawnError> {
         .filter(|value| !value.is_empty())
         .map(PaneId::from)
         .ok_or(SpawnError::MissingAnchor)
+}
+
+/// The first prompt: the agent's brief, the caller's text, or the brief followed by it.
+///
+/// The brief comes first so the caller's instruction reads as an instruction about it, separated by a
+/// blank line so a brief ending mid-paragraph does not run into the instruction.
+///
+/// `None` only when there is neither, which is a spawn with nothing to deliver. Composed rather than
+/// re-parsed: both halves are already non-blank, so the result cannot be.
+fn first_prompt(brief: Option<&NonEmptyText>, text: Option<&NonEmptyText>) -> Option<NonEmptyText> {
+    match (brief, text) {
+        (Some(brief), Some(text)) => Some(NonEmptyText::composed(format!("{brief}\n\n{text}"))),
+        (Some(only), None) | (None, Some(only)) => Some(only.clone()),
+        (None, None) => None,
+    }
 }
 
 /// Where `cwd` sits inside `repo_root`, or `None` when there is nothing to place.
@@ -856,6 +929,67 @@ mod tests {
             "--placement pane needs a calling herdr pane and HERDR_PANE_ID is unset; \
              use --placement tab, workspace, or worktree"
         );
+    }
+
+    #[test]
+    fn the_agent_is_named_with_agent_rather_than_preset() {
+        assert_eq!(
+            parse(&["spawn", "reviewer", "--agent", "opus"]).agent.as_deref(),
+            Some("opus")
+        );
+        assert_eq!(
+            parse(&["spawn", "reviewer"]).agent,
+            None,
+            "the config's default applies"
+        );
+    }
+
+    /// The old flag is declared only so its rename can be reported.
+    ///
+    /// clap's suggestion machinery will not reach `--agent` from `preset`, and a bare *unrecognized
+    /// argument* is a poor way to learn about a rename.
+    #[test]
+    fn the_old_flag_is_answered_with_the_one_that_replaced_it() {
+        let args = parse(&["spawn", "reviewer", "--preset", "opus"]);
+
+        let error = args.check_renamed_flags().unwrap_err();
+
+        assert_eq!(error.exit_status(), ExitStatus::Usage);
+        assert_eq!(error.to_string(), "--preset is now --agent");
+    }
+
+    #[test]
+    fn a_spawn_that_uses_neither_flag_passes_the_rename_check() {
+        assert!(
+            parse(&["spawn", "reviewer", "--agent", "opus"])
+                .check_renamed_flags()
+                .is_ok()
+        );
+    }
+
+    /// The brief comes first, so the caller's instruction reads as an instruction about it.
+    #[test]
+    fn a_brief_and_a_prompt_are_delivered_as_one_message_with_a_blank_line_between() {
+        let brief = "You review Rust.".parse::<NonEmptyText>().unwrap();
+        let text = "start with the auth module".parse::<NonEmptyText>().unwrap();
+
+        assert_eq!(
+            first_prompt(Some(&brief), Some(&text)).unwrap().to_string(),
+            "You review Rust.\n\nstart with the auth module"
+        );
+    }
+
+    #[test]
+    fn either_half_alone_is_delivered_unchanged_and_neither_delivers_nothing() {
+        let brief = "You review Rust.".parse::<NonEmptyText>().unwrap();
+        let text = "audit the CLI".parse::<NonEmptyText>().unwrap();
+
+        assert_eq!(
+            first_prompt(Some(&brief), None).unwrap().to_string(),
+            "You review Rust."
+        );
+        assert_eq!(first_prompt(None, Some(&text)).unwrap().to_string(), "audit the CLI");
+        assert!(first_prompt(None, None).is_none());
     }
 
     #[test]
