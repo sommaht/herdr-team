@@ -103,14 +103,33 @@ Code 5 is the one worth retrying, and only once the state its message names has 
 whose shell is still starting clears itself; an occupied composer, a working agent, and a taken
 name do not.
 
+## Known issues
+
+Defects rather than deferrals: each is understood, reproduced, and not yet fixed.
+
+- **A prompt to an agent that is already working is delivered more than once.** Delivery is proven
+  by waiting for the target's status to reach `working`, and a target already in that state never
+  transitions into it — so herdr reports a submission it actually delivered as undelivered, and the
+  re-send that exists for genuinely swallowed prompts lands a second copy. The command then exits 5,
+  whose contract invites a retry, and that retry lands a third. Every copy arrives; what is wrong is
+  the count and the failure the caller is told about. `--no-verify` avoids it by asking for no wait
+  at all, at the cost of the delivery guarantee. The fix is to re-send only when the target was idle
+  beforehand, and to report an unverifiable delivery as a success that says so.
+
+- **A worktree spawn opens on its harness's trust prompt rather than a composer.** A fresh checkout
+  is a directory the harness has never seen, so it asks whether the directory is trusted before it
+  will accept input — while herdr reports the pane interactive and ready, because a live prompt is
+  what it can see. A first prompt delivered into that state answers the dialog instead of being
+  read, and only the re-send above puts the real prompt in the composer. Observed with a Claude Code
+  preset that does not skip permission checks; a Codex preset opened straight to a composer. There is
+  no fix inside this tool that does not amount to answering someone's security prompt for them,
+  which is why it is recorded rather than worked around.
+
 ## Roadmap
 
 Each of these is a decision to defer, not an oversight.
 
-- **Inter-agent messaging** — a message envelope carrying the sender's identity and a reply path.
 - **Witnessed delivery** — proving a message was received rather than that it was submitted.
-- **Placeholder discrimination in the composer guard** — telling a harness's dimmed placeholder
-  hint apart from typed text, via styling attributes rather than plain text.
 - **Spawning somewhere other than here** — `spawn` infers where it is from the environment, so it
   can only split the pane it runs in, and only when it runs in one. A flag naming a pane would let a
   caller outside a session split anyway, and one inside anchor somewhere other than itself.
