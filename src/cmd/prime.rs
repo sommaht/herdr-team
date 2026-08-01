@@ -81,7 +81,7 @@ scalar it declares is overridden and a vector extended, so `--` adds to its flag
 
     msg <target> \"<text>\"                 returns once delivery is proven, not when the turn ends
     msg <target> -                        read the message from stdin; beats quoting a long one
-    msg <target> \"<text>\" --wait-until idle    wait for the turn to finish instead
+    msg <target> \"<text>\" --wait-until idle --wait-until done   wait out the turn
     msg <target> \"<text>\" --force         send even into a composer holding unsent text
     msg <target> \"<text>\" --no-verify     submit without waiting for proof it landed
     msg <target> \"<text>\" --no-reply      answer a message without inviting another
@@ -145,10 +145,10 @@ Launch a reviewer in its own tab and hand it the diff:
 
     git diff | herdr-team spawn reviewer --placement tab --msg -
 
-Dispatch work and block until there is a result to read. No reply is invited, because you are
-already watching — where the fan-out below invites one instead and does not wait at all:
+Dispatch work and block until it finishes. Name both terminal states — a harness settling to
+`done` never reaches `idle`, and one alone times out on work that is done — and invite no reply:
 
-    herdr-team msg reviewer \"run the tests\" --no-reply --wait-until idle
+    herdr-team msg reviewer \"run the tests\" --no-reply --wait-until idle --wait-until done
 
 Fan out, then clean up when one is done:
 
@@ -505,6 +505,30 @@ mod tests {
             tabled.contains(&retryable.as_str()),
             "the brief never tabulates {retryable} as the retryable code"
         );
+    }
+
+    /// Every settle wait the brief teaches names both terminal states.
+    ///
+    /// Found by running the brief's own dispatch-and-wait line against a fresh Claude Code agent:
+    /// the message was delivered and answered, and the command still exited 1 with "timed out
+    /// waiting for agent status". That harness finishes at `done` and never passes through `idle`,
+    /// so a wait naming only `idle` spends its whole timeout and then reports a failure that did not
+    /// happen — the wrong answer nobody is told about, which is the failure this tool exists to
+    /// avoid.
+    ///
+    /// Asserted per line rather than over the whole brief, so a second example added later cannot
+    /// pass by borrowing the first one's `done`.
+    #[test]
+    fn a_wait_the_brief_teaches_never_names_one_terminal_state_alone() {
+        let waits: Vec<&str> = GUIDANCE.lines().filter(|line| line.contains("--wait-until")).collect();
+
+        assert!(!waits.is_empty(), "the brief teaches no settle wait at all");
+        for line in waits {
+            assert!(
+                line.contains("--wait-until idle") && line.contains("--wait-until done"),
+                "a settle wait naming one state times out on the other: {line}"
+            );
+        }
     }
 
     #[test]

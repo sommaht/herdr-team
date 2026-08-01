@@ -71,7 +71,7 @@ const DELIVERY_INTERVAL_MS: u64 = 250;
     herdr-team msg reviewer \"run the test suite and report failures\"\n  \
     git diff | herdr-team msg reviewer -\n  \
     herdr-team msg dispatcher --no-reply \"done: 4 flags are undocumented\"\n  \
-    herdr-team msg w4:p17 \"go\" --wait-until idle --timeout 120000\n\
+    herdr-team msg w4:p17 \"go\" --wait-until idle --wait-until done --timeout 120000\n\
     \n\
     Called `prompt` until this build; that spelling still works.")]
 pub struct MsgArgs {
@@ -116,8 +116,13 @@ impl MsgArgs {
     /// How this submission's delivery will be proven, given what the target is doing now.
     ///
     /// An explicit `--wait-until` is honored whatever the current status, because the caller is
-    /// asking about a transition rather than about delivery: `--wait-until idle` against a working
-    /// agent is a request to wait out the turn, and that transition does happen.
+    /// asking about a transition rather than about delivery: waiting on a settled state against a
+    /// working agent is a request to wait out the turn, and that transition does happen.
+    ///
+    /// Which states settle is the caller's to name, and naming only one is the trap: a Claude Code
+    /// agent finishes at `done` and never reaches `idle`, so `--wait-until idle` alone spends the
+    /// whole timeout and then reports a failure for a message that was delivered and answered.
+    /// Every example this crate ships names both.
     fn proof(&self, current: &str) -> Proof {
         if self.no_verify {
             return Proof::None;
