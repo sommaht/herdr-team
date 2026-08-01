@@ -81,7 +81,7 @@ scalar it declares is overridden and a vector extended, so `--` adds to its flag
 
     msg <target> \"<text>\"                 returns once delivery is proven, not when the turn ends
     msg <target> -                        read the message from stdin; beats quoting a long one
-    msg <target> \"<text>\" --wait-until idle --wait-until done   wait out the turn
+    msg <target> \"<text>\" --wait-until idle --wait-until done   wait out the turn in progress
     msg <target> \"<text>\" --force         send even into a composer holding unsent text
     msg <target> \"<text>\" --no-verify     submit without waiting for proof it landed
     msg <target> \"<text>\" --no-reply      answer a message without inviting another
