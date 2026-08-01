@@ -53,9 +53,6 @@ const STALL_REPORTED_ABOVE_MS: u64 = 5_000;
 /// enough to scroll the transcript is a message `detection` cannot see.
 const DELIVERY_SOURCE: &str = "recent-unwrapped";
 
-/// Rows read past the message's own height, covering the harness furniture drawn beneath it.
-const DELIVERY_MARGIN: u32 = 40;
-
 /// The most rows one read can return, which herdr clamps to whatever is asked for.
 const DELIVERY_MAX_LINES: u32 = 1_000;
 
@@ -214,13 +211,17 @@ impl Cmd for MsgArgs {
 
         let before = agent::get(&self.target)?;
         let proof = self.proof(before.status());
+        // How far back this harness's pane has to be read to find a message that arrived. Asked of
+        // the harness rather than fixed here, because Codex and Claude Code differ by more than four
+        // times — and taken from this read rather than the guard's, so `--force` resolves it too.
+        let margin = harness::delivery_margin(before.kind());
         // Always mail: this command's argument is what a sender wrote, so it always has an author to
         // name. Only `spawn` has a brief, and only `spawn` can deliver one alone.
         let delivery = Delivery::Mail {
             brief: None,
             body: (*self.text).clone(),
         };
-        let submission = deliver(&self.target, &delivery, &self.reply(), &proof, sink)?;
+        let submission = deliver(&self.target, &delivery, &self.reply(), &proof, margin, sink)?;
 
         // Said out loud rather than left to the `delivered` field, which only the `--json` reader
         // sees. A caller reading the one line would otherwise treat an unproven dispatch as a
@@ -518,14 +519,15 @@ pub(super) struct Submission {
 
 /// Looks for `id` in the target's pane until it appears or the poll window closes.
 ///
-/// This is the proof for a target that was already working. The harness renders a queued message
+/// This is the proof for every shape but a matched delivery wait. The harness renders the message
 /// where a reader can see it — Claude Code expands the whole body into its transcript, Codex lists it
 /// under a "messages to be submitted" banner — and both render the opening tag that carries the id.
 ///
-/// The window is sized to the message, because the message is what pushed the transcript along: a
-/// hundred-line dispatch scrolls its own opening out of any fixed window. herdr clamps the request
-/// at [`DELIVERY_MAX_LINES`] regardless, so a message longer than that is read from its tail and the
-/// id may genuinely be gone — reported as unproven, which is the honest answer.
+/// The window is [`delivery_window`]: the message's own height, because the message is what pushed
+/// the transcript along, plus `margin` for everything drawn beneath it. That second half is the one
+/// that is easy to get wrong and is the harness's to answer — a harness may park its composer at the
+/// bottom of the pane and pad the whole gap above it, which is a terminal's height rather than a
+/// fixed number of rows. See [`harness::delivery_margin`].
 ///
 /// Never an error. A snapshot that cannot be read, or a harness whose rendering this build does not
 /// recognize, leaves delivery unproven rather than failing a prompt that did land — the same stance
@@ -538,10 +540,11 @@ pub(super) struct Submission {
 fn confirm_in_pane<E>(
     id: &str,
     text: &NonEmptyText,
+    margin: u32,
     poll_ms: u64,
     read: impl Fn(&'static str, u32) -> Result<String, E>,
 ) -> bool {
-    let lines = delivery_window(text.lines().count());
+    let lines = delivery_window(text.lines().count(), margin);
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(poll_ms);
 
     loop {
@@ -564,17 +567,22 @@ fn confirm_in_pane<E>(
 
 /// How many rows to read back when looking for a delivered message.
 ///
-/// Sized to the message, because the message is what pushed the transcript along: a hundred-line
-/// dispatch scrolls its own opening tag out of any fixed window, and the opening tag is where the id
-/// rides. herdr clamps a read at a thousand rows whatever is asked for, so a message longer than that
-/// is read from its tail and its id may genuinely be gone — reported unproven, which is honest.
+/// Two terms, and both earn their place. The message's own height, because the message is what
+/// pushed the transcript along: a hundred-line dispatch scrolls its own opening tag out of any fixed
+/// window, and the opening tag is where the id rides. Then `margin` for whatever the harness draws
+/// below it, which is that harness's own number rather than one this module picks — Codex leaves
+/// about ten rows there and Claude Code about forty-five in the same pane, so no single figure
+/// serves both. [`harness::delivery_margin`] is where those live.
+///
+/// herdr clamps a read at [`DELIVERY_MAX_LINES`] whatever is asked for, so a message longer than
+/// that is read from its tail and its id may genuinely be gone — reported unproven, which is honest.
 /// Takes the line count rather than the message, which is all it is about. RS-030 would otherwise
 /// make this a method on `NonEmptyText`, dragging this command's read policy into `core` — the
 /// module the style guide keeps free of every other module's vocabulary.
-fn delivery_window(message_lines: usize) -> u32 {
+fn delivery_window(message_lines: usize, margin: u32) -> u32 {
     u32::try_from(message_lines)
         .unwrap_or(DELIVERY_MAX_LINES)
-        .saturating_add(DELIVERY_MARGIN)
+        .saturating_add(margin)
         .min(DELIVERY_MAX_LINES)
 }
 
@@ -592,6 +600,7 @@ pub(super) fn deliver(
     delivery: &Delivery,
     reply: &Reply,
     proof: &Proof,
+    margin: u32,
     sink: &Sink,
 ) -> Result<Submission, MsgError> {
     // Composed once, before the re-send: a second submission must deliver the same bytes as the
@@ -599,7 +608,15 @@ pub(super) fn deliver(
     // leaving the pane check hunting for a token no delivered copy carries.
     let (text, id) = delivery.compose(reply, sink);
 
-    deliver_through(&ThroughHerdr { target }, target, &text, id.as_deref(), proof, sink)
+    deliver_through(
+        &ThroughHerdr { target },
+        target,
+        &text,
+        id.as_deref(),
+        proof,
+        margin,
+        sink,
+    )
 }
 
 /// Everything [`deliver`] does once the text is composed, over operations a test can supply.
@@ -644,6 +661,7 @@ fn deliver_through<D: Delivering>(
     text: &NonEmptyText,
     id: Option<&str>,
     proof: &Proof,
+    margin: u32,
     sink: &Sink,
 ) -> Result<Submission, MsgError> {
     let deadline = Deadline::within(proof.budget_ms());
@@ -656,7 +674,7 @@ fn deliver_through<D: Delivering>(
         (Proof::None, _) => false,
         (Proof::Delivery(_), _) => true,
         (Proof::Pane { .. } | Proof::Settle { .. }, Some(id)) => {
-            confirm_in_pane(id, text, deadline.share(DELIVERY_POLL_MS), |source, lines| {
+            confirm_in_pane(id, text, margin, deadline.share(DELIVERY_POLL_MS), |source, lines| {
                 delivering.read(source, lines)
             })
         }
@@ -826,6 +844,13 @@ mod tests {
 
     fn parse(argv: &[&str]) -> MsgArgs {
         Harness::try_parse_from(argv).expect("parses").args
+    }
+
+    /// One harness's margin, for the tests that need a window rather than a particular one.
+    ///
+    /// Asked of the harness rather than written down, so these cannot drift from what ships.
+    fn codex_margin() -> u32 {
+        harness::delivery_margin(Some("codex"))
     }
 
     fn record() -> AgentRecord {
@@ -1125,16 +1150,76 @@ mod tests {
     /// The window is sized to the message, which is what scrolled the transcript in the first place.
     #[test]
     fn the_read_window_covers_the_message_plus_room_for_the_harness_furniture() {
-        assert_eq!(delivery_window(1), 1 + DELIVERY_MARGIN);
-        assert_eq!(delivery_window(100), 100 + DELIVERY_MARGIN);
+        let margin = harness::delivery_margin(Some("codex"));
+
+        assert_eq!(delivery_window(1, margin), 1 + margin);
+        assert_eq!(delivery_window(100, margin), 100 + margin);
 
         // herdr clamps a read at a thousand rows whatever is asked for, so asking for more would
         // only misreport how much was actually looked at.
-        assert_eq!(delivery_window(5_000), DELIVERY_MAX_LINES);
+        assert_eq!(delivery_window(5_000, margin), DELIVERY_MAX_LINES);
         assert_eq!(
-            delivery_window(usize::MAX),
+            delivery_window(usize::MAX, margin),
             DELIVERY_MAX_LINES,
             "no wrap on the way past u32"
+        );
+        assert_eq!(
+            delivery_window(1, DELIVERY_MAX_LINES),
+            DELIVERY_MAX_LINES,
+            "a margin past the clamp cannot ask for a read herdr would not answer"
+        );
+    }
+
+    /// Each harness's window has to clear that harness's own gap, and clear it with room.
+    ///
+    /// The gaps are live measurements against a sixty-five-row pane carrying a three-line message.
+    /// Codex left the `<mail>` element about ten rows from the bottom; Claude Code about forty-five,
+    /// because it anchors its composer to the bottom of the pane and paints blank rows over the whole
+    /// gap above it. One shared forty-row margin missed the second by a handful of rows and reported
+    /// a delivered message as unproven.
+    ///
+    /// Asserted with headroom rather than at the measurement, which is the point of the test: a
+    /// number that only just passes today fails the first time a harness adds a line of padding, and
+    /// nothing about that failure is visible — the read succeeds and simply does not hold the id.
+    #[test]
+    fn each_harness_gets_a_window_that_clears_its_own_measured_gap() {
+        // The message length those gaps were measured with.
+        let window = |kind| delivery_window(3, harness::delivery_margin(Some(kind)));
+
+        for (kind, gap) in [("codex", 10_u32), ("claude", 45)] {
+            assert!(window(kind) > gap, "{kind}'s gap of {gap} rows was missed outright");
+            assert!(
+                window(kind) >= gap * 4,
+                "{kind}'s gap of {gap} rows is cleared by too little to survive added padding"
+            );
+        }
+
+        // Claude Code's gap is the pane minus its transcript, so it scales with the terminal and no
+        // fixed figure serves it. Its window is sized past any pane instead, which leaves the pane's
+        // own height as the bound — and that bound is herdr's to enforce rather than ours to guess.
+        let a_tall_pane = 200_u32;
+        assert!(window("claude") > a_tall_pane);
+
+        // Codex stops at the end of its transcript, so its window is bounded by what it draws. The
+        // two being different is the whole reason this is the harness's answer and not a constant.
+        assert!(window("codex") < window("claude"));
+    }
+
+    /// An unfamiliar harness gets the most generous window, because the failures are not symmetric.
+    #[test]
+    fn a_kind_this_build_does_not_know_is_read_at_least_as_far_back_as_any_it_does() {
+        let unknown = harness::delivery_margin(Some("some-agent-shipped-next-year"));
+
+        for kind in harness::kinds() {
+            assert!(
+                unknown >= harness::delivery_margin(Some(kind)),
+                "{kind} is read further back than an unrecognized harness"
+            );
+        }
+        assert_eq!(
+            harness::delivery_margin(None),
+            unknown,
+            "a pane with no agent, likewise"
         );
     }
 
@@ -1144,7 +1229,7 @@ mod tests {
         let text = NonEmptyText::composed("<mail from=\"dispatcher\" id=\"k7m2x9\">\ngo\n</mail>".to_owned());
         let asked = std::cell::RefCell::new(Vec::new());
 
-        let found = confirm_in_pane("k7m2x9", &text, DELIVERY_POLL_MS, |source, lines| {
+        let found = confirm_in_pane("k7m2x9", &text, codex_margin(), DELIVERY_POLL_MS, |source, lines| {
             asked.borrow_mut().push((source, lines));
             Ok::<_, ()>("… transcript …\n  <mail from=\"dispatcher\" id=\"k7m2x9\">\n  go\n".to_owned())
         });
@@ -1152,7 +1237,7 @@ mod tests {
         assert!(found);
         assert_eq!(
             asked.into_inner(),
-            [("recent-unwrapped", 3 + DELIVERY_MARGIN)],
+            [("recent-unwrapped", 3 + codex_margin())],
             "one read, from the source that rejoins wrapped rows"
         );
     }
@@ -1164,7 +1249,13 @@ mod tests {
 
         let unreadable = |_: &str, _: u32| Err::<String, ()>(());
 
-        assert!(!confirm_in_pane("abc123", &text, DELIVERY_POLL_MS, unreadable));
+        assert!(!confirm_in_pane(
+            "abc123",
+            &text,
+            codex_margin(),
+            DELIVERY_POLL_MS,
+            unreadable
+        ));
     }
 
     /// An id belonging to some earlier message is not this message's proof.
@@ -1180,7 +1271,7 @@ mod tests {
         // The second look fails rather than missing again, which ends the poll after one interval.
         // Spending the whole window here would put three seconds into every run of the suite to
         // re-assert what the first miss already showed.
-        let found = confirm_in_pane("newone", &text, DELIVERY_POLL_MS, |_, _| {
+        let found = confirm_in_pane("newone", &text, codex_margin(), DELIVERY_POLL_MS, |_, _| {
             looked.set(looked.get() + 1);
             if looked.get() == 1 {
                 Ok(stale.to_owned())
@@ -1274,6 +1365,7 @@ mod tests {
             &NonEmptyText::composed(format!("<mail from=\"operator\" id=\"{SCRIPTED_ID}\">\ngo\n</mail>")),
             Some(SCRIPTED_ID),
             proof,
+            codex_margin(),
             &Sink::new(crate::core::OutputMode::Human),
         )
     }

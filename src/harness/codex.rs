@@ -73,6 +73,23 @@ impl AgentHarness for Codex {
         Some(head..end)
     }
 
+    /// Far less than the default, because this harness does not pad down to the bottom of its pane.
+    ///
+    /// Codex appends to its transcript and leaves the rest of the screen alone, so what sits below a
+    /// delivered message is furniture and not a pane: the queued-message banner, the composer, and
+    /// the footer. Measured against a sixty-five-row pane with a three-line message, the `<mail>`
+    /// element sat about **ten rows** from the bottom — and a `--lines 100` read of that same pane
+    /// answered forty-one rows, where Claude Code's answered sixty-four, which is the difference
+    /// itself: one harness writes blank rows down to the bottom and this one stops.
+    ///
+    /// A dozen times the measurement, so the agent beginning to answer within the poll window cannot
+    /// push the message out of the read. Still far below [`super::PANE_SCALED_MARGIN`], and the gap
+    /// between the two numbers is the point: this one is bounded by what Codex draws, and that one
+    /// is bounded by the terminal.
+    fn delivery_margin(&self) -> u32 {
+        120
+    }
+
     /// The same `SessionStart` envelope Claude Code reads, on weaker evidence than that one.
     ///
     /// What is established: Codex runs a `SessionStart` hook, and its hooks answer with JSON on stdout
@@ -221,6 +238,22 @@ mod tests {
     #[test]
     fn claudes_marker_is_not_this_harnesss_to_read() {
         assert_eq!(Codex.composer_occupied(&["❯ a claude draft"]), None);
+    }
+
+    /// This harness stops at the end of its transcript, so its gap is furniture and stays small.
+    ///
+    /// Pinned by name, and well clear of the ten rows measured: the number is what decides whether a
+    /// delivered message can be found, and getting it wrong has no symptom but a false "unproven".
+    #[test]
+    fn the_delivery_margin_clears_this_harnesss_measured_gap_without_covering_a_whole_pane() {
+        const MEASURED_GAP: u32 = 10;
+
+        assert_eq!(Codex.delivery_margin(), 120);
+        assert!(Codex.delivery_margin() >= MEASURED_GAP * 4);
+        assert!(
+            Codex.delivery_margin() < crate::harness::PANE_SCALED_MARGIN,
+            "this harness does not pad down to the bottom of its pane, and should not read as if it did"
+        );
     }
 
     /// The reason this is a method rather than one shared spelling: Codex has no effort flag, so the

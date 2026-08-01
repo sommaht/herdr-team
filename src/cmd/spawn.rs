@@ -460,7 +460,11 @@ impl SpawnArgs {
         // `prompt`'s problem is met here too, and by the same rule: an agent that came up working
         // has no state change left for herdr to match, so its pane is read for the message instead.
         let proof = Proof::for_delivery(started.status(), DEFAULT_SETTLE_MS);
-        let submission = deliver(pane, &delivery, &self.reply(), &proof, sink)?;
+        // From herdr's own detection rather than from `configured.kind`, which is what was asked
+        // for: the pane being read is the one herdr identified, and that is whose rendering the
+        // margin describes.
+        let margin = crate::harness::delivery_margin(started.kind());
+        let submission = deliver(pane, &delivery, &self.reply(), &proof, margin, sink)?;
 
         // Said out loud rather than left to the `delivered` field, which only the `--json` reader
         // sees — a caller reading the one line would otherwise wait forever on work that was never
