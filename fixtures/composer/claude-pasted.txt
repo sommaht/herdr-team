@@ -24,17 +24,17 @@
 
 
 
-
-
-
-
-
-
-
-
+                                                                                                                                                                              ctrl+g to edit in Vim
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-❯
+❯ [Pasted text #1 +13 lines][Pasted text #2 +13 lines][Pasted text #3 +13 lines][Pasted text #4 +13 lines]at someone dropped into the composer
+  line 54 of a long pasted block of text that someone dropped into the composer
+  line 55 of a long pasted block of text that someone dropped into the composer
+  line 56 of a long pasted block of text that someone dropped into the composer
+  line 57 of a long pasted block of text that someone dropped into the composer
+  line 58 of a long pasted block of text that someone dropped into the composer
+  line 59 of a long pasted block of text that someone dropped into the composer
+  line 60 of a long pasted block of text that someone dropped into the composer
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-   Opus 5  high  Session: 2.0%  3hr 28m      ⎇ no git
-   Ctx: 0        Weekly: 40.0%  2d 21hr 48m  operator@example.com
-  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents
+   Opus 5  high  Session: 2.0%  3hr 27m      ⎇ no git
+   Ctx: 0        Weekly: 40.0%  2d 21hr 47m  operator@example.com
+  paste again to expand

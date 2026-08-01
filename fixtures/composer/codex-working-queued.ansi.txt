@@ -1,0 +1,40 @@
+  The earliest text editors were line editors. On early computers, users often interacted through punched cards, paper tape, or slow printing terminals rather than a display. A full-screen
+  interface was impractical because the computer could not easily refresh an entire page of text. Instead, users issued commands that operated on individual lines or ranges of lines. The Unix
+  editor [0m[38;5;6med[0m, created by Ken Thompson in the early 1970s, became an important example. It allowed users to insert, delete, search, substitute, and print lines. Although austere by modern standards,
+  [0m[38;5;6med[0m established ideas that remain central to editing: addressing text, applying transformations, and separating commands from the document itself.
+
+  As video terminals became more common, editors could display a larger portion of a document at once. This led to screen editors, which let users move a cursor through visible text and make
+  changes interactively. [0m[38;5;6mvi[0m, developed by Bill Joy for BSD Unix in the late 1970s, grew from an earlier editor called [0m[38;5;6mex[0m, which itself extended the line-oriented tradition of [0m[38;5;6med[0m. The division
+  between command mode and insert mode was partly a response to the limitations of early terminals and communication links. Instead of assigning every key an editing action, [0m[38;5;6mvi[0m used compact
+  commands that could be sent efficiently over slow connections. Its modal design also made complex text transformations possible without relying on menus or a mouse.
+
+  Around the same period, Richard Stallman began developing Emacs, initially at the Massachusetts Institute of Technology. Emacs was based on the idea that an editor should be extensible through a
+  programming language. Rather than treating editing as a fixed collection of commands, Emacs allowed users to redefine behavior, add features, and build specialized modes. Over time, Emacs became
+  an environment for programming, email, documentation, version control, and interactive development. Its extensibility influenced later editors and helped establish the idea that an editor could
+  become a personalized computing environment rather than merely a document window.
+
+  The personal-computer revolution introduced a different set of priorities. Editors such as WordStar, released in the late 1970s, were designed for users who wanted to write documents on
+  relatively inexpensive machines. They offered formatting commands, keyboard shortcuts, and support for printers. WordPerfect became another major word-processing system during the 1980s. These
+  applications blurred the boundary between text editing and document production by adding fonts, pagination, margins, and layout controls. Although they were not primarily programming editors,
+  they demonstrated that text manipulation could become a mainstream desktop activity.
+
+  Graphical user interfaces transformed editing again. The Macintosh and Microsoft Windows popularized editors with menus, toolbars, scrollbars, dialog boxes, and mouse-based selection. Users no
+  longer needed to memorize command sequences to perform basic operations. The clipboard, drag-and-drop interaction, proportional fonts, and visible formatting made editing more accessible to
+  nontechnical users. At the same time, programmers continued to favor command-driven tools because they were fast, scriptable, and usable over remote connections.
+
+  During the 1980s and 1990s, programming editors became increasingly specialized. Editors added syntax highlighting, automatic indentation, code navigation, compiler integration, and debugging
+  support. These features helped produce the modern integrated development environment, or IDE. Systems such as Turbo Pascal’s development environment combined editing, compilation, and execution
+  in one interface. Later IDEs for Java, C++, and other languages added project management, refactoring, graphical debugging, and source-control integration.
+
+  The rise of the internet and open-source software expanded the editor ecosystem. Vim, a descendant of [0m[38;5;6mvi[0m, added extensive configuration and scripting while preserving modal editing. Emacs
+  continued to evolve through packages and community extensions. Editors such as TextMate and Sublime Text emphasized speed, visual polish, plugins, and multiple cursors. Atom introduced a web-
+  technology-based extension model, while Microsoft’s Visual Studio Code combined a lightweight editor with language servers, debugging, version control, integrated terminals, and a large
+  extension marketplace.
+
+[0m[2m• [0mMessages to be submitted after next tool call[0m[2m (press esc to interrupt and send immediately)[0m
+[0m[2m  ↳ Now write another 800 words about the history of version control systems. Do not use tools.[0m
+[0m[2m  ↳ also cover SCCS and RCS[0m
+[0m[48;2;65;67;78m                                                                                                                                                                                                    [0m
+[0m[1m[48;2;65;67;78m›[0m[48;2;65;67;78m [0m[2m[48;2;65;67;78mFind and fix a bug in @filename[0m[48;2;65;67;78m                                                                                                                                                                   [0m
+[0m[48;2;65;67;78m                                                                                                                                                                                                    [0m
+  [0m[38;2;246;226;183mgpt-5.6-codex medium[0m[2m · [0m[38;2;171;223;167m/work[0m[2m · [0m[38;2;242;181;144mContext 95% left[0m[2m · [0m[38;2;233;144;169mweekly 89% left[0m[2m · [0m[38;2;200;169;238mFast off[0m

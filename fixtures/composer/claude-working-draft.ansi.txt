@@ -1,0 +1,40 @@
+  [0m[1mBefore the multiplexer[0m
+
+  In the 1970s and early 1980s, a terminal was hardware — a VT100 or ADM-3A wired to a minicomputer over a serial line. One terminal, one session. If you wanted to run two things at once on Unix,
+  you either walked to a second terminal or backgrounded a job with [0m[38;5;153m& [0mand lost interactivity. Job control, added to the C shell by Jim Kulp and refined in 4.2BSD, softened this by letting you
+  suspend and resume processes with [0m[38;5;153m^Z[0m, [0m[38;5;153mfg[0m, and [0m[38;5;153mbg[0m. But job control multiplexes [0m[3mjobs[0m, not [0m[3mscreens[0m: only one program could own the terminal's display at a time.
+
+  Two ideas were needed to go further. The first was the pseudoterminal — a kernel device pair, master and slave, that lets one program impersonate a terminal for another. Pseudoterminals appeared
+  in Unix in the late 1970s and made it possible for a userspace process to sit between the user and a shell. The second was terminal abstraction. Terminals disagreed wildly about escape
+  sequences, so Bill Joy's termcap (1978), written for vi, and Ken Arnold's curses library gave programs a portable way to move the cursor and repaint a screen. Later, System V's terminfo replaced
+  termcap's flat file with a compiled database.
+
+  [0m[1mGNU Screen[0m
+
+  The first widely used multiplexer was GNU Screen, written by Oliver Laumann in 1987 and later maintained under the FSF as part of the GNU project. Screen combined the two ideas above: it
+  allocated a pseudoterminal per window, drew a virtual screen for each in memory, and repainted whichever one you were looking at. Its defining feature was detaching. You could disconnect from a
+  session — deliberately, or because your modem dropped — and reattach later with the processes still running and their output intact.
+
+  That single capability changed how people worked on remote machines. Long compiles, IRC clients, and interactive debuggers survived flaky links. Screen also introduced conventions that persist
+  today: a prefix key ([0m[38;5;153m^A[0m) to escape the multiplexer's own commands, numbered windows, a copy-scrollback mode, and multiuser session sharing for pair debugging.
+
+  [0m[1mtmux and the modern era[0m
+
+  Screen's codebase aged badly. By the 2000s it carried decades of portability workarounds, and development slowed. In 2007 Nicholas Marriott released tmux under a BSD license, written for OpenBSD
+  and structured as a client–server program: a background server owns the sessions, and lightweight clients attach to it over a Unix socket. This separation made scripting straightforward — [0m[38;5;153mtmux [0m
+  [0m[38;5;153msend-keys[0m, [0m[38;5;153mtmux new-window[0m, and similar commands manipulate a running session from outside it. tmux also treated tiled panes as a first-class concept rather than an add-on, and shipped a
+  configuration format people were willing to edit. OpenBSD replaced Screen with tmux in its base system in 2009, and most Linux distributions followed in practice if not by default.
+
+  Alternatives kept arriving. dtach (2004) stripped the idea to its minimum: detaching only, no window management. abduco pairs similarly with dvtm. Byobu wrapped Screen and later tmux in a
+  friendlier status line. Zellij, released in 2021 and written in Rust, added discoverable keybindings, layouts, and a WebAssembly plugin system aimed at users who found tmux's defaults hostile.
+
+
+
+
+                                                                               
+[0m[38;5;244m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[0m
+[0m[38;5;246m❯ [0mhold on, I have a follow-up
+[0m[38;5;244m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[0m
+  [0m[38;5;231m[48;5;174m Opus 5  high [0m[38;5;174m[48;5;223m[0m[38;5;59m[48;5;223m Session: 2.0% [0m[38;5;223m[48;5;109m[0m[38;5;230m[48;5;109m 3hr 26m     [0m[38;5;109m[48;5;151m[0m[38;5;59m[48;5;151m ⎇ no git                  [0m
+  [0m[38;5;231m[48;5;174m Ctx: 0       [0m[38;5;174m[48;5;223m[0m[38;5;59m[48;5;223m Weekly: 40.0% [0m[38;5;223m[48;5;109m[0m[38;5;230m[48;5;109m 2d 21hr 46m [0m[38;5;109m[48;5;151m[0m[38;5;59m[48;5;151m operator@example.com [0m
+  [0m[38;5;220m⏵⏵ auto mode on[0m[38;5;246m (shift+tab to cycle)[0m
