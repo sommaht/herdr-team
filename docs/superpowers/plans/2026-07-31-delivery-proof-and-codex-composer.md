@@ -332,6 +332,11 @@ The two branches are not symmetric, and the asymmetry is the design rather than 
       allowance cannot become a successful settle because the pane happened to show the id.
 - [ ] `proven` becomes: `None` false, `Delivery(_)` true, `Pane` and both `Settle` shapes from
       `confirm_in_pane`.
+- [ ] **The unproven warning at `src/cmd/msg.rs:190-194` becomes status-neutral.** It says the
+      target "was already working", which was the only way to reach it before and is now false for
+      a settled target whose pane never showed the id. Say what is actually known — the pane never
+      showed the message, so delivery is unproven — and name no status. Same for the doc on
+      `Delivered::delivered` (`msg.rs:448-452`), which documents only the old case.
 - [ ] A submission that comes back `is_undelivered()` still re-sends once, as today. The settle
       wait runs once, after whichever submission succeeded, and never twice.
 
@@ -365,6 +370,8 @@ The two branches are not symmetric, and the asymmetry is the design rather than 
       delivery leg.
 - [ ] A regression test named for Finding 1: a `Settle` wait that matched, with a pane that never
       showed the id, reports `delivered: false`.
+- [ ] The unproven warning names no status, so a settled target that goes unproven is not told it
+      was already working. Assert the text rather than only the flag — the wording is the defect.
 
 ### Task A6 — say it in the docs
 
