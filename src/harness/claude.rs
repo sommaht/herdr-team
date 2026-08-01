@@ -35,6 +35,23 @@ impl AgentHarness for ClaudeCode {
         super::prompt_box_range(lines)
     }
 
+    /// The default, and this is the harness the default is shaped around.
+    ///
+    /// **Its gap is not furniture — it is the pane minus the transcript.** Claude Code anchors its
+    /// composer box to the bottom of the screen and paints blank rows over everything between that
+    /// box and the end of the transcript, so a delivered message sits as far up as the terminal is
+    /// tall. Measured against a sixty-five-row pane with a three-line message, the `<mail>` element
+    /// sat about **forty-five rows** from the bottom; the same agent in a hundred-and-twenty-row
+    /// pane would put it around a hundred.
+    ///
+    /// So there is no figure to measure toward here — any fixed number is wrong in a taller pane.
+    /// [`super::PANE_SCALED_MARGIN`] is sized past any pane instead, which makes the pane's own
+    /// height the bound, and that bound is herdr's to enforce rather than ours to guess. Stated
+    /// explicitly rather than inherited, because the reason it is the default *is* this measurement.
+    fn delivery_margin(&self) -> u32 {
+        super::PANE_SCALED_MARGIN
+    }
+
     /// Claude Code's documented `SessionStart` shape: a `hookSpecificOutput` object whose
     /// `additionalContext` string is injected into the session.
     ///
@@ -70,6 +87,24 @@ mod tests {
         assert_eq!(ClaudeCode.composer_occupied(&["❯"]), Some(false));
         assert_eq!(ClaudeCode.composer_occupied(&["❯ "]), Some(false));
         assert_eq!(ClaudeCode.composer_occupied(&["❯ half a thought"]), Some(true));
+    }
+
+    /// This harness parks its composer at the bottom of the pane, so its gap scales with the pane.
+    ///
+    /// No fixed figure serves it — forty-five rows in a sixty-five-row pane becomes about a hundred
+    /// in a hundred-and-twenty-row one — so the window is sized past any pane and herdr's clamp to
+    /// the pane's own height becomes the real bound.
+    #[test]
+    fn the_delivery_margin_covers_a_whole_pane_rather_than_a_measured_gap() {
+        const MEASURED_GAP: u32 = 45;
+        const A_TALL_PANE: u32 = 200;
+
+        assert_eq!(ClaudeCode.delivery_margin(), crate::harness::PANE_SCALED_MARGIN);
+        assert!(ClaudeCode.delivery_margin() >= MEASURED_GAP * 4);
+        assert!(
+            ClaudeCode.delivery_margin() > A_TALL_PANE,
+            "the gap grows with the terminal, so passing today's measurement is not enough"
+        );
     }
 
     #[test]

@@ -10,6 +10,14 @@
 //! Touches no process and no pane. [`readiness`] is handed the *means* to read and decides what to
 //! ask for, so the I/O stays in [`crate::herdr`] and a test supplies a closure returning a literal.
 //!
+//! **What a harness renders, and where, is that harness's own business — a caller asks it rather
+//! than carrying a number that happens to suit whichever one was measured last.** That is true
+//! twice now. Locating the composer was one shared rule until Codex turned out not to draw a box,
+//! and how far above the bottom of a pane a delivered message sits was one shared constant until
+//! Claude Code turned out to park its composer at the bottom and pad the whole gap above it. Both
+//! were a single number or rule standing in for two different renderings, and in both cases the
+//! harness it did not describe was the one that silently stopped being served.
+//!
 //! **Locating the composer is each harness's own job, and it used to be one shared rule here.**
 //! That rule — the lines between the snapshot's last two horizontal rules — is exact for a harness
 //! that draws a box and wrong for one that does not. Codex draws no border around its composer at
@@ -125,6 +133,16 @@ const STYLED: Probe = Probe {
     lines: 40,
 };
 
+/// A delivery margin sized past any pane, for a harness whose gap scales with the terminal instead
+/// of being fixed furniture.
+///
+/// Claude Code's does — see [`ClaudeCode::delivery_margin`] — and this is also the trait default,
+/// for the reason that makes it Claude Code's value: a harness nobody has measured is far safer
+/// over-read than under-read. Under-reading has no symptom. The read succeeds, the id is simply not
+/// in what came back, and a delivered message is reported unproven. Over-reading has none either,
+/// because herdr clamps the read to what the pane holds.
+const PANE_SCALED_MARGIN: u32 = 500;
+
 /// A coding-agent CLI whose composer this tool can read.
 ///
 /// Deliberately not a registry of supported agents: herdr's kind list has 21 entries and grows, and
@@ -189,6 +207,21 @@ pub trait AgentHarness: std::fmt::Debug {
         Probe::default()
     }
 
+    /// How many rows this harness draws between a delivered message and the bottom of its pane.
+    ///
+    /// The other read's counterpart to [`probe`](Self::probe): that one says what to look at to find
+    /// the *composer*, and this says how far back to look to find a *message that arrived*. Both are
+    /// questions only the harness can answer, and this one was a single module constant until the
+    /// two known harnesses turned out to differ by more than four times — see each impl.
+    ///
+    /// Defaulted rather than required, because it is a number a harness can be served safely without
+    /// stating: the default is [`PANE_SCALED_MARGIN`], which is the generous end. An impl overrides
+    /// it only to say it has been measured and needs less, and the measurement goes in its doc
+    /// comment so a later reader can tell a figure from a guess.
+    fn delivery_margin(&self) -> u32 {
+        PANE_SCALED_MARGIN
+    }
+
     /// Whether this harness's composer holds unsubmitted input.
     ///
     /// `None` when the body is not recognizable as this harness's composer — no non-empty line at
@@ -218,6 +251,37 @@ pub fn by_kind(kind: &str) -> Option<&'static dyn AgentHarness> {
 /// advertising one set of names while [`by_kind`] accepts another.
 pub fn kinds() -> Vec<&'static str> {
     HARNESSES.into_iter().map(AgentHarness::kind).collect()
+}
+
+/// How far back to read this kind's pane when looking for a message that was delivered to it.
+///
+/// The seam a caller proving delivery asks, so no command carries a row count of its own. `kind` is
+/// what `agent get` or `agent start` reported.
+///
+/// **A kind this build does not know gets the most generous margin any known harness declares, not a
+/// middle one.** The two failure modes are not symmetric: reading too far costs nothing, because
+/// herdr clamps the request to what the pane holds, while reading too little reports a message that
+/// arrived as unproven and does so silently — there is no failed read to notice, the id is just
+/// absent from what came back. An unfamiliar harness that parks its composer high is exactly the
+/// case that would produce that noise.
+///
+/// Taken from [`HARNESSES`] rather than written down, so a harness added later that parks higher
+/// than any of today's raises this by existing.
+pub fn delivery_margin(kind: Option<&str>) -> u32 {
+    kind.and_then(by_kind)
+        .map_or_else(widest_delivery_margin, AgentHarness::delivery_margin)
+}
+
+/// The most generous margin any harness in [`HARNESSES`] declares.
+///
+/// [`PANE_SCALED_MARGIN`] when there are none, which is unreachable — the array is non-empty — and
+/// is the same answer the trait's own default gives, so the fallback cannot be the lenient one.
+fn widest_delivery_margin() -> u32 {
+    HARNESSES
+        .into_iter()
+        .map(AgentHarness::delivery_margin)
+        .max()
+        .unwrap_or(PANE_SCALED_MARGIN)
 }
 
 // =====================================================================================================================
@@ -1014,6 +1078,69 @@ mod tests {
                 Some(include_str!("../fixtures/composer/codex-empty.ansi.txt"))
             ),
             Composer::Empty
+        );
+    }
+
+    /// An unknown kind is read at least as far back as every known one, never a middle distance.
+    ///
+    /// The two failures are not symmetric. Reading too far costs nothing — herdr clamps the request
+    /// to what the pane holds — while reading too little reports a message that arrived as unproven,
+    /// and does it silently: the read succeeds and the id is simply not in it. So the kind this build
+    /// cannot identify gets the most generous window, and a harness added later that parks higher
+    /// than any of today's raises that window by existing rather than by anyone remembering to.
+    #[test]
+    fn an_unrecognized_kind_is_read_as_far_back_as_the_most_generous_harness() {
+        let unknown = delivery_margin(Some("some-agent-shipped-next-year"));
+
+        for harness in HARNESSES {
+            assert!(
+                unknown >= harness.delivery_margin(),
+                "{} is read further back than an unrecognized kind",
+                harness.kind()
+            );
+        }
+        assert_eq!(unknown, widest_delivery_margin());
+        assert_eq!(delivery_margin(None), unknown, "a pane hosting no agent, likewise");
+    }
+
+    /// A harness that states nothing is served the generous end rather than the convenient one.
+    #[test]
+    fn the_trait_default_is_the_most_generous_value_rather_than_a_middle_one() {
+        #[derive(Debug)]
+        struct Unmeasured;
+
+        impl AgentHarness for Unmeasured {
+            fn kind(&self) -> &'static str {
+                "unmeasured"
+            }
+            fn marker(&self) -> char {
+                '#'
+            }
+            fn composer_range(&self, _lines: &[&str]) -> Option<std::ops::Range<usize>> {
+                None
+            }
+            fn hook(&self, context: &str) -> Result<String, serde_json::Error> {
+                session_start(context)
+            }
+            fn tuning(&self, _model: Option<&str>, _effort: Option<&str>) -> Vec<String> {
+                Vec::new()
+            }
+        }
+
+        assert_eq!(Unmeasured.delivery_margin(), PANE_SCALED_MARGIN);
+        assert!(Unmeasured.delivery_margin() >= widest_delivery_margin());
+    }
+
+    /// The two known harnesses differ by more than four times, which is why this is not a constant.
+    #[test]
+    fn each_harness_answers_the_read_distance_its_own_rendering_calls_for() {
+        let codex = delivery_margin(Some("codex"));
+        let claude = delivery_margin(Some("claude"));
+
+        assert!(
+            claude >= codex * 4,
+            "one harness pads down to the bottom of its pane and the other stops at its transcript; \
+             a single number would over-read one and under-read the other"
         );
     }
 
