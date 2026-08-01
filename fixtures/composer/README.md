@@ -11,7 +11,9 @@ same text:
 
 Neither reaches into scrollback beyond the pane. herdr builds the plain one from the pane's row
 count and only then applies `--lines`, so asking for more rows finds more only in a pane that has
-them, and a composer taller than its pane cannot be read at all.
+them, and a composer taller than its pane cannot be read at all. Where a scenario's own line count
+matters, the row below says which pane height and which `--lines` it was taken at — without both
+numbers a later reader cannot tell whether the file still demonstrates anything.
 
 The plain file answers "is there anything in the composer". The styled one answers the follow-up
 the plain one cannot: whether that content is a draft or something the harness drew for itself,
@@ -33,7 +35,8 @@ captures, and nothing that reads a composer may key on what sits below it.
 | `codex-empty` | The composer holds only Codex's own faint placeholder, and horizontal rules sit in the transcript above it. The rules are the trap: they are not the composer's borders and must not be read as them. |
 | `codex-draft` | One typed line. |
 | `codex-multiline` | A three-line draft: the marker leads and the continuations are indented, with no blank line inside it. |
-| `codex-pasted` | Sixty pasted lines, read at forty. No marker and no rule survive, so the composer cannot be located at all and the guard fails open. The case it is most worth having, and the one it cannot cover. |
+| `codex-pasted` | Sixty pasted lines, read at forty in a sixty-five-row pane. No marker and no rule survive, so the composer cannot be located at all and the guard fails open. The honest "cannot see it" case. |
+| `codex-pasted-tall` | The same sixty lines and the same pane, read at eighty. The plain half is sixty-five lines and holds the marker; its last forty are byte-identical to `codex-pasted.txt`, which is what makes the pair prove that the line count did the work. The styled half stays at forty, because `visible` is the viewport and asking for more would only misreport how much was looked at. |
 | `codex-working` | Mid-turn, composer untouched. |
 | `codex-working-queued` | Mid-turn with messages queued: a banner above the composer, which is itself still empty. |
 | `codex-working-queued-draft` | Queued *and* drafted at once, which is also where the footer changes shape. |
