@@ -6,8 +6,12 @@ same text:
 
 | File | herdr source | What it is |
 | --- | --- | --- |
-| `<name>.txt` | `agent read --source detection --format text` | escapes stripped, soft-wrapped rows rejoined, reaches past the pane into scrollback |
+| `<name>.txt` | `agent read --source detection --format text` | escapes stripped, soft-wrapped rows rejoined, sized to the pane's own row count |
 | `<name>.ansi.txt` | `agent read --source visible --format ansi` | escapes kept, wrapped as drawn, and never taller than the pane |
+
+Neither reaches into scrollback beyond the pane. herdr builds the plain one from the pane's row
+count and only then applies `--lines`, so asking for more rows finds more only in a pane that has
+them, and a composer taller than its pane cannot be read at all.
 
 The plain file answers "is there anything in the composer". The styled one answers the follow-up
 the plain one cannot: whether that content is a draft or something the harness drew for itself,
@@ -29,7 +33,7 @@ captures, and nothing that reads a composer may key on what sits below it.
 | `codex-empty` | The composer holds only Codex's own faint placeholder, and horizontal rules sit in the transcript above it. The rules are the trap: they are not the composer's borders and must not be read as them. |
 | `codex-draft` | One typed line. |
 | `codex-multiline` | A three-line draft: the marker leads and the continuations are indented, with no blank line inside it. |
-| `codex-pasted` | Sixty pasted lines. The marker is past the plain window at forty lines and past the pane entirely in the styled one. |
+| `codex-pasted` | Sixty pasted lines, read at forty. No marker and no rule survive, so the composer cannot be located at all and the guard fails open. The case it is most worth having, and the one it cannot cover. |
 | `codex-working` | Mid-turn, composer untouched. |
 | `codex-working-queued` | Mid-turn with messages queued: a banner above the composer, which is itself still empty. |
 | `codex-working-queued-draft` | Queued *and* drafted at once, which is also where the footer changes shape. |
@@ -44,7 +48,7 @@ captures, and nothing that reads a composer may key on what sits below it.
 | `claude-empty` | Both borders drawn, composer empty. |
 | `claude-occupied` | One typed line. |
 | `claude-multiline` | A three-line draft. |
-| `claude-pasted` | Sixty pasted lines, which pushes the top border past a forty-line window. |
+| `claude-pasted` | Sixty pasted lines. Claude collapses most of them into `[Pasted text #1 +13 lines]` chips, so both borders and the live marker still fit inside forty lines — the contrast with `codex-pasted`, which does not. |
 | `claude-working` | Mid-turn, composer untouched. |
 | `claude-working-draft` | Mid-turn with a draft. |
 | `claude-working-queued` | A queued message, where the harness writes `Press up to edit queued messages` into the composer itself — faint, so it is a suggestion rather than a draft. |
