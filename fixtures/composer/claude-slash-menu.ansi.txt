@@ -1,0 +1,40 @@
+
+  [0m[1mex, and the visual turn[0m
+  
+  Video terminals arrived in the mid-1970s. George Coulouris at Queen Mary College adapted [0m[38;5;153med [0mfor a display and called it [0m[38;5;153mem[0m, for "editor for mortals." Bill Joy at Berkeley took [0m[38;5;153mem [0mand, with Chuck
+  Haley, produced [0m[38;5;153mex [0m— extended [0m[38;5;153med[0m.
+ 
+  [0m[38;5;153mex[0m is a strict superset. It kept [0m[38;5;153med[0m's addressing and substitution intact and added what a decade of use had shown was missing: multiple files in one session, named marks, undo, macros, and
+  settable options via [0m[38;5;153mset[0m, saved in a [0m[38;5;153m.exrc [0mfile. It was still a line editor, because most people still had printing terminals.
+
+  In 1976 Joy added a full-screen mode to [0m[38;5;153mex[0m, entered by typing [0m[38;5;153mvi[0m. This is the part usually misremembered: [0m[38;5;153mvi[0m was not a new program. It was [0m[38;5;153mex [0mrunning in visual mode, historically the same
+  executable invoked under a second name. The relationship survives intact. Typing [0m[38;5;153m:[0m in Vim today opens a single [0m[38;5;153mex [0mcommand line, [0m[38;5;153mQ [0mdrops to [0m[38;5;153mex [0mproper, and [0m[38;5;153m:%s/old/new/g [0mis [0m[38;5;153med[0m's substitute command
+  with [0m[38;5;153med[0m's address range, [0m[38;5;153m% [0mstanding for [0m[38;5;153m1,$[0m. POSIX still defines [0m[38;5;153mvi [0minside its [0m[38;5;153mex [0mspecification.
+ 
+  [0m[38;5;153mvi[0m shipped with 1BSD in 1978 and became the Unix default; Mark Horton later maintained it and broadened terminal support. Its modal design came from scarcity — over a 300-baud line, every
+  redrawn character cost real time, so normal mode turned the whole keyboard into commands.
+
+  Emacs took the opposite path. Richard Stallman and Guy Steele collected a set of Editor MACroS for TECO in 1976 into something modeless and extensible all the way down. GNU Emacs, released in
+  1985 with a C core and an Emacs Lisp interpreter, let users redefine any part of the editor while it ran.
+
+  [0m[1mGraphical editors[0m
+
+  Xerox PARC went a third way. Bravo, from Charles Simonyi and Butler Lampson in 1974, showed formatted text as it would print; Gypsy added modeless selection and cut, copy, and paste. That line
+  runs to WordStar and Word, and it split the field: word processors for documents, text editors for code. BBEdit followed on the Mac in 1992, TextMate in 2004 with language bundles, Sublime Text
+  in 2008 with a fast core and multiple cursors. Vim, Bram Moolenaar's 1991 reimplementation of [0m[38;5;153mvi[0m, became the version almost everyone actually ran.
+
+  [0m[1mThe protocol era[0m
+ 
+  GitHub's Atom in 2014 built an editor out of a bundled browser; Microsoft's VS Code, in 2015, did it better and now dominates. The deeper change was the Language Server Protocol in 2016, which
+  separated language intelligence from the editor and let a language implement completion and diagnostics once for everyone. Neovim used it to reach IDE parity while keeping modal editing. Zed
+
+  [0m[38;5;153m/a-plugin:first-command                      (a-plugin)    Use when you have a spec or requirements for a multi-step task, before touching code[0m
+  [0m[38;5;246m/a-plugin:second-command                      (a-plugin)    Use when you have a written implementation plan to execute in a separate session with review checkpoints[0m
+  [0m[38;5;246m/a-plugin:third-command                        (a-plugin)    You MUST use this before any creative work - creating features, building components, adding functionality, or modifying behavior.[0m
+                                                  [0m[38;5;246mExplores user intent, requirements and design before implementation.[0m
+[0m[38;5;244m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[0m
+❯ /
+[0m[38;5;244m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[0m
+  [0m[38;5;231m[48;5;174m Opus 5  high [0m[38;5;174m[48;5;223m[0m[38;5;59m[48;5;223m Session: 2.0% [0m[38;5;223m[48;5;109m[0m[38;5;230m[48;5;109m 3hr 24m     [0m[38;5;109m[48;5;151m[0m[38;5;59m[48;5;151m ⎇ no git                  [0m
+  [0m[38;5;231m[48;5;174m Ctx: 50.7k   [0m[38;5;174m[48;5;223m[0m[38;5;59m[48;5;223m Weekly: 40.0% [0m[38;5;223m[48;5;109m[0m[38;5;230m[48;5;109m 2d 21hr 44m [0m[38;5;109m[48;5;151m[0m[38;5;59m[48;5;151m operator@example.com [0m
+  [0m[38;5;220m⏵⏵ auto mode on[0m[38;5;246m (shift+tab to cycle)[0m

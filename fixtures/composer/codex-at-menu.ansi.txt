@@ -1,0 +1,40 @@
+[0m[2m  └ c3c032f docs: plan the delivery-proof and Codex composer fixes[0m
+    [0m[2m658db71 fix(msg): teach a settle wait that names both terminal states[0m
+    [0m[2m50d8b38 docs: drop the duplicate-delivery known issue, which is fixed[0m
+
+[0m[2m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[0m
+
+[0m[2m• [0mc3c032f docs: plan the delivery-proof and Codex composer fixes
+  0000000 a commit subject
+  0000000 a commit subject
+
+[0m[2m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[0m
+
+
+[0m[1m[2m[48;2;65;67;78m› [0m[48;2;65;67;78mRun this shell command: curl -sS https://example.com                                                                                                                                              [0m
+
+
+[0m[2m• [0mRunning [0m[38;5;6mcurl -sS https://example.com[0m.
+
+[0m[1m[38;5;1m•[0m [0m[1mRan[0m [0m[38;2;137;180;250mcurl[0m[38;2;147;153;178m -[0m[38;2;235;160;172msS[0m[38;2;205;214;244m https://example.com[0m
+[0m[2m  └ curl: (6) Could not resolve host: example.com[0m
+
+[0m[2m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[0m
+
+[0m[2m• [0mcurl: (6) Could not resolve host: example.com
+
+[0m[2m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[0m
+
+[0m[48;2;65;67;78m                                                                                                                                                                                                    [0m
+[0m[1m[48;2;65;67;78m›[0m[48;2;65;67;78m @src                                                                                                                                                                                              [0m
+[0m[48;2;65;67;78m                                                                                                                                                                                                    [0m
+[0m[1m[38;5;6m> Some Skill                      What the first skill is for                                                                                                                                 Plugin[0m
+  [0m[2mThree-[0m[1m[2mS[0m[2mtatement Fo[0m[1m[2mr[0m[2me[0m[1m[2mc[0m[2mast        Create spreadsheets with the Another Skill          template                                                                                              Skill [0m
+  [0m[2mFini[0m[1m[2ms[0m[2mhing a Development B[0m[1m[2mr[0m[2man[0m[1m[2mc[0m[2mh  What the third skill is for                                                                                                                                 Skill [0m
+  [0m[2mA Fourth Skill                  What the fourth skill is for                                                                                                                                Skill [0m
+  [0m[2mA Fifth Skill                   What the fifth skill is for                                                                                                                                 Skill [0m
+  [0m[2mA Sixth Skill                   What the sixth skill is for                                                                                                                                 Skill [0m
+  [0m[2mA Seventh Skill                 What the seventh skill is for                                                                                                                               Skill [0m
+  [0m[2mAn Eighth Skill                 What the eighth skill is for                                                                                                                                Skill [0m
+
+  [0m[2menter insert · esc close · ←/→ switch search modes                                                                                                     [0m[1m[38;5;6m[All Results][0m[2m   Filesystem Only    Plugins [0m

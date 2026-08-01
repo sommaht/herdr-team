@@ -1,0 +1,6 @@
+  ⏺ Read src/main.rs (42 lines)
+
+────────────────────────────────────────── repo ──
+❯ wait, before you commit that
+──────────────────────────────────────────────────
+  ⏵⏵ accept edits on                    17k tokens

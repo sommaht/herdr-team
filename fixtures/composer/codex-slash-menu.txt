@@ -1,0 +1,40 @@
+  laptop sleep, and changing locations. Screen became a standard tool on servers, especially for system maintenance and collaborative terminal work. Its limitations, including an aging
+  configuration model and awkward defaults, encouraged the development of alternatives.
+
+  By the 2000s, terminal emulators had become graphical applications running on desktop operating systems. This made it possible to open multiple tabs and windows locally, but graphical tabs did
+  not solve remote persistence. A terminal multiplexer still operated inside the remote host, where it could preserve processes after the network connection closed.
+
+  tmux appeared in the late 2000s, originating in the OpenBSD ecosystem. It offered a cleaner architecture and configuration model, while retaining Screen’s central ideas: sessions, windows,
+  panes, clients, detachment, and reattachment. Unlike early terminal workflows based primarily on serial lines, tmux was designed for contemporary Unix systems and worked naturally with pseudo-
+  terminals, SSH, scripting, and programmable status bars.
+
+  Later tools explored narrower variations. dtach focused on detaching and reattaching a single process without providing a full window-management interface. Byobu supplied a friendlier interface
+  and configuration layer around Screen or tmux. Modern terminal applications also implement tabs, splits, and panes directly, but these features remain distinct from server-side session
+  persistence.
+
+  Today, terminal multiplexers support development environments, production operations, CI debugging, teaching, pair work, and agent-based workflows. Their core purpose has remained consistent for
+  decades: separate interactive terminal state from the fragile connection used to view it. What began as a solution to unreliable terminals has become a durable interface for managing many
+  concurrent text sessions.
+
+
+› also mention screen and dtach
+
+
+• Screen and dtach are already included:
+
+  - Screen: described as the first widely influential Unix terminal multiplexer and its detach/reattach model.
+  - dtach: described as a lightweight alternative focused on detaching and reattaching a single process.
+
+  The essay also contrasts both with tmux, which adds richer session, window, and pane management.
+
+
+› /
+
+  /model         choose what model and reasoning effort to use
+  /fast          1.5x speed, increased usage
+  /ide           include current selection, open files, and other context from your IDE
+  /permissions   choose what Codex is allowed to do
+  /keymap        remap TUI shortcuts
+  /vim           toggle Vim mode for the composer
+  /experimental  toggle experimental features
+  /approve       approve one retry of a recent auto-review denial

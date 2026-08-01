@@ -495,15 +495,15 @@ mod tests {
             expected: Composer::Occupied,
         },
         Case {
-            name: "an idle Codex composer holds nothing",
+            name: "an idle Codex composer that draws both borders holds nothing",
             kind: Some("codex"),
-            snapshot: include_str!("../fixtures/composer/codex-empty.txt"),
+            snapshot: include_str!("../fixtures/composer/codex-bordered-empty.txt"),
             expected: Composer::Empty,
         },
         Case {
-            name: "a draft on a later line of the box counts too",
+            name: "a draft on a later line of a bordered box counts too",
             kind: Some("codex"),
-            snapshot: include_str!("../fixtures/composer/codex-multiline.txt"),
+            snapshot: include_str!("../fixtures/composer/codex-bordered-multiline.txt"),
             expected: Composer::Occupied,
         },
         Case {
@@ -511,7 +511,7 @@ mod tests {
             // every known marker against the first non-empty body line.
             name: "an unknown kind falls back to probing every known marker",
             kind: Some("some-agent-this-build-has-never-heard-of"),
-            snapshot: include_str!("../fixtures/composer/codex-empty.txt"),
+            snapshot: include_str!("../fixtures/composer/codex-bordered-empty.txt"),
             expected: Composer::Empty,
         },
         Case {
@@ -643,7 +643,10 @@ mod tests {
         // A codex box reported as claude: claude's harness cannot read it, codex's can, and the
         // answer comes from the one that recognized it rather than from the label.
         assert_eq!(
-            against(Some("claude"), include_str!("../fixtures/composer/codex-empty.txt")),
+            against(
+                Some("claude"),
+                include_str!("../fixtures/composer/codex-bordered-empty.txt")
+            ),
             Composer::Empty
         );
         // Nothing recognizes this one, so it fails open rather than being called occupied.
