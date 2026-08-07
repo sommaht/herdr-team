@@ -1,0 +1,14 @@
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+› Write a detailed 800-word essay about the history of text editors. Take your time. Do not use any tools.
+
+
+• Text editors have evolved from simple line-oriented tools into sophisticated environments for programming, writing, collaboration, and system administration. Their history reflects the broader
+  development of computing: from scarce mainframe resources, through personal computers and graphical interfaces, to today’s cloud-based and AI-assisted workflows. Despite their changing
+  appearance, text editors have consistently served one fundamental purpose: allowing people to create, inspect, and transform text efficiently.
+
+
+› Find and fix a bug in @filename
+
+  gpt-5.6-codex medium · /work · Context 95% left · weekly 89% left · Fast off

@@ -1,0 +1,40 @@
+  laptop sleep, and changing locations. Screen became a standard tool on servers, especially for system maintenance and collaborative terminal work. Its limitations, including an aging
+  configuration model and awkward defaults, encouraged the development of alternatives.
+
+  By the 2000s, terminal emulators had become graphical applications running on desktop operating systems. This made it possible to open multiple tabs and windows locally, but graphical tabs did
+  not solve remote persistence. A terminal multiplexer still operated inside the remote host, where it could preserve processes after the network connection closed.
+
+  [0m[38;5;6mtmux[0m appeared in the late 2000s, originating in the OpenBSD ecosystem. It offered a cleaner architecture and configuration model, while retaining Screen’s central ideas: sessions, windows,
+  panes, clients, detachment, and reattachment. Unlike early terminal workflows based primarily on serial lines, tmux was designed for contemporary Unix systems and worked naturally with pseudo-
+  terminals, SSH, scripting, and programmable status bars.
+
+  Later tools explored narrower variations. [0m[38;5;6mdtach[0m focused on detaching and reattaching a single process without providing a full window-management interface. Byobu supplied a friendlier interface
+  and configuration layer around Screen or tmux. Modern terminal applications also implement tabs, splits, and panes directly, but these features remain distinct from server-side session
+  persistence.
+
+  Today, terminal multiplexers support development environments, production operations, CI debugging, teaching, pair work, and agent-based workflows. Their core purpose has remained consistent for
+  decades: separate interactive terminal state from the fragile connection used to view it. What began as a solution to unreliable terminals has become a durable interface for managing many
+  concurrent text sessions.
+
+
+[0m[1m[2m[48;2;65;67;78m› [0m[48;2;65;67;78malso mention screen and dtach                                                                                                                                                                     [0m
+
+
+[0m[2m• [0mScreen and [0m[38;5;6mdtach[0m are already included:
+
+  - Screen: described as the first widely influential Unix terminal multiplexer and its detach/reattach model.
+  - [0m[38;5;6mdtach[0m: described as a lightweight alternative focused on detaching and reattaching a single process.
+
+  The essay also contrasts both with [0m[38;5;6mtmux[0m, which adds richer session, window, and pane management.
+
+[0m[48;2;65;67;78m                                                                                                                                                                                                    [0m
+[0m[1m[48;2;65;67;78m›[0m[48;2;65;67;78m /                                                                                                                                                                                                 [0m
+[0m[48;2;65;67;78m                                                                                                                                                                                                    [0m
+  [0m[1m[38;5;6m/model         choose what model and reasoning effort to use[0m
+  /fast          [0m[2m1.5x speed, increased usage[0m
+  /ide           [0m[2minclude current selection, open files, and other context from your IDE[0m
+  /permissions   [0m[2mchoose what Codex is allowed to do[0m
+  /keymap        [0m[2mremap TUI shortcuts[0m
+  /vim           [0m[2mtoggle Vim mode for the composer[0m
+  /experimental  [0m[2mtoggle experimental features[0m
+  /approve       [0m[2mapprove one retry of a recent auto-review denial[0m

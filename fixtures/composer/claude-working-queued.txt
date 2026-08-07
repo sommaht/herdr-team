@@ -1,0 +1,40 @@
+  for each in memory, and repainted whichever one you were looking at.
+
+  Its defining feature was detaching. You could disconnect — deliberately, or because your modem dropped — and reattach later with processes still running and output intact. That one capability
+  changed remote work: long compiles, IRC clients, and debuggers survived flaky links. Screen also set conventions that outlived it: a prefix key (^A), numbered windows, a copy-scrollback mode,
+  and multiuser session sharing.
+
+  dtach and the minimalist line
+
+  Not everyone wanted the whole apparatus. Ned T. Crigler's dtach (2004) does exactly one thing Screen does — attach and detach — and nothing else. No windows, no panes, no status line, no copy
+  mode. It allocates a pty, keeps a small buffer of recent output to redraw on reattach, and otherwise passes bytes straight through, in well under a thousand lines of C.
+
+  That has a real payoff. Screen and tmux both parse and re-render terminal output, which historically broke full-screen and 256-color applications in subtle ways; dtach emulates nothing, so
+  programs behave as they would on a bare terminal. The cost is no session sharing, no splitting, and no history beyond the buffer. Users who want both halves compose them: abduco (a dtach-like
+  detacher) paired with Marc André Tanner's dvtm for tiling.
+
+  tmux and the modern era
+
+  Screen's codebase aged badly, carrying decades of portability workarounds. In 2007 Nicholas Marriott released tmux under a BSD license, structured as client–server: a background server owns the
+  sessions, and thin clients attach over a Unix socket. That split made scripting natural — tmux send-keys, tmux new-window — and tmux treated tiled panes as first-class rather than bolted on.
+  OpenBSD replaced Screen with tmux in its base system in 2009.
+
+  Byobu wrapped Screen and later tmux in a friendlier status line. Zellij (2021, Rust) added discoverable keybindings, layouts, and WebAssembly plugins for users who found tmux's defaults hostile.
+  Meanwhile iTerm2, WezTerm, and Kitty absorbed tabs and splits into the emulator itself. What they cannot do is survive the loss of the connection — which is why, on any remote host, the
+  multiplexer is still the first tool people reach for.
+
+✻ Brewed for 34s
+
+❯ Write another 800-word essay, this time about the history of text editors. Do not use tools.
+
+✻ Unfurling… (7s · ↓ 2.0k tokens · thinking with high effort)
+  ⎿  Tip: Use Plan Mode to prepare for a complex request before making changes. Press shift+tab twice to enable.
+
+  ❯ also cover ed and ex
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ Press up to edit queued messages
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   Opus 5  high  Session: 2.0%  3hr 26m      ⎇ no git
+   Ctx: 44.6k    Weekly: 40.0%  2d 21hr 46m  operator@example.com
+  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents

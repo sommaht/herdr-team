@@ -1,6 +1,6 @@
+  Before the multiplexer
 
-
-
+  In the 1970s and early 1980s, a terminal was hardware — a VT100 or ADM-3A wired to a minicomputer over a serial line. One terminal, one session. If you wanted to run two things at once on Unix,
 
 
 
@@ -35,6 +35,6 @@
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 ❯
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-   Opus 5  high  Session: 2.0%  3hr 28m      ⎇ no git
-   Ctx: 0        Weekly: 40.0%  2d 21hr 48m  operator@example.com
+   Opus 5  high  Session: 2.0%  3hr 27m      ⎇ no git
+   Ctx: 0        Weekly: 40.0%  2d 21hr 47m  operator@example.com
   ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents

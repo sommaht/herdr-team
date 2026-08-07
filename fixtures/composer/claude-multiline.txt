@@ -29,12 +29,12 @@
 
 
 
-
-
-
+                                                                                                                                                                              ctrl+g to edit in Vim
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-❯
+❯ first line of the draft
+  second line of the draft
+  third line of the draft
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-   Opus 5  high  Session: 2.0%  3hr 28m      ⎇ no git
-   Ctx: 0        Weekly: 40.0%  2d 21hr 48m  operator@example.com
-  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents
+   Opus 5  high  Session: 2.0%  3hr 27m      ⎇ no git
+   Ctx: 0        Weekly: 40.0%  2d 21hr 47m  operator@example.com
+  ⏵⏵ auto mode on (shift+tab to cycle)

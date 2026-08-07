@@ -65,6 +65,24 @@ pub fn prompt(target: &str, text: &NonEmptyText, wait: Option<&Wait>) -> Result<
     Ok(prompted.agent)
 }
 
+/// Waits for a target to hold one of several states, with no submission attached.
+///
+/// **Not the wait [`prompt`] carries, and the difference decides where it may be used.** The wait
+/// on a submission is anchored: herdr carries the submission's own state-change sequence into it,
+/// so a named state matches only through a transition that happened afterwards. This one has no
+/// anchor at all — it reads the current status first and returns immediately if that already
+/// matches. So it proves a transition only for a caller who has already established one, and
+/// issued against a target nobody has prompted it answers whatever the target happens to be doing.
+///
+/// # Errors
+///
+/// Returns whatever [`run`] returned. `timeout` means none of the states arrived; there is no
+/// stall to report, because nothing was submitted that could have stalled.
+pub fn wait(target: &str, wait: &Wait) -> Result<AgentRecord, HerdrError> {
+    let info: AgentInfo = run(&wait_args(target, wait))?;
+    Ok(info.agent)
+}
+
 /// The delivery wait attached to a submission.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Wait {
@@ -140,7 +158,7 @@ impl AgentRecord {
     }
 }
 
-/// `agent get`'s result.
+/// `agent get`'s result, and `agent wait`'s — herdr answers both with the same envelope.
 #[derive(Debug, Deserialize)]
 struct AgentInfo {
     agent: AgentRecord,
@@ -213,6 +231,20 @@ fn prompt_args(target: &str, text: &str, wait: Option<&Wait>) -> Vec<String> {
         vector.push("--timeout".to_owned());
         vector.push(wait.timeout.to_string());
     }
+    vector
+}
+
+/// `herdr agent wait <TARGET> --until <STATE>… --timeout <MS>`.
+///
+/// No `--wait` flag: this subcommand *is* the wait, where `agent prompt` needs one to opt into it.
+fn wait_args(target: &str, wait: &Wait) -> Vec<String> {
+    let mut vector = ["agent", "wait", target].map(str::to_owned).to_vec();
+    for state in &wait.until {
+        vector.push("--until".to_owned());
+        vector.push(state.clone());
+    }
+    vector.push("--timeout".to_owned());
+    vector.push(wait.timeout.to_string());
     vector
 }
 
@@ -306,6 +338,53 @@ mod tests {
             prompt_args("reviewer", "go", None),
             ["agent", "prompt", "reviewer", "go"]
         );
+    }
+
+    /// The standalone wait spells the same states, with no `--wait` to opt into.
+    #[test]
+    fn a_standalone_wait_repeats_until_once_per_state_and_carries_no_wait_flag() {
+        let wait = Wait {
+            until: vec!["idle".to_owned(), "done".to_owned()],
+            timeout: 120_000,
+        };
+
+        assert_eq!(
+            wait_args("reviewer", &wait),
+            [
+                "agent",
+                "wait",
+                "reviewer",
+                "--until",
+                "idle",
+                "--until",
+                "done",
+                "--timeout",
+                "120000"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_standalone_wait_for_one_state_names_it_once() {
+        let wait = Wait {
+            until: vec![WORKING.to_owned()],
+            timeout: 15_000,
+        };
+
+        assert_eq!(
+            wait_args("w4:p17", &wait),
+            ["agent", "wait", "w4:p17", "--until", "working", "--timeout", "15000"]
+        );
+    }
+
+    /// `agent wait` answers the envelope `agent get` does, which is why it reuses that struct.
+    #[test]
+    fn a_standalone_wait_answers_the_same_envelope_a_get_does() {
+        let info: AgentInfo =
+            serde_json::from_str(r#"{"agent":{"agent":"codex","agent_status":"done","pane_id":"w4:p17"}}"#).unwrap();
+
+        assert_eq!(info.agent.status(), "done");
+        assert_eq!(info.agent.kind(), Some("codex"));
     }
 
     #[test]
