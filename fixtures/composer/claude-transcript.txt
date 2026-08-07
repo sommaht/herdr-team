@@ -1,0 +1,40 @@
+  ex, and the visual turn
+
+  Video terminals arrived in the mid-1970s. George Coulouris at Queen Mary College adapted ed for a display and called it em, for "editor for mortals." Bill Joy at Berkeley took em and, with Chuck
+  Haley, produced ex — extended ed.
+
+  ex is a strict superset. It kept ed's addressing and substitution intact and added what a decade of use had shown was missing: multiple files in one session, named marks, undo, macros, and
+  settable options via set, saved in a .exrc file. It was still a line editor, because most people still had printing terminals.
+
+  In 1976 Joy added a full-screen mode to ex, entered by typing vi. This is the part usually misremembered: vi was not a new program. It was ex running in visual mode, historically the same
+  executable invoked under a second name. The relationship survives intact. Typing : in Vim today opens a single ex command line, Q drops to ex proper, and :%s/old/new/g is ed's substitute command
+  with ed's address range, % standing for 1,$. POSIX still defines vi inside its ex specification.
+
+  vi shipped with 1BSD in 1978 and became the Unix default; Mark Horton later maintained it and broadened terminal support. Its modal design came from scarcity — over a 300-baud line, every
+  redrawn character cost real time, so normal mode turned the whole keyboard into commands.
+
+  Emacs took the opposite path. Richard Stallman and Guy Steele collected a set of Editor MACroS for TECO in 1976 into something modeless and extensible all the way down. GNU Emacs, released in
+  1985 with a C core and an Emacs Lisp interpreter, let users redefine any part of the editor while it ran.
+
+  Graphical editors
+
+  Xerox PARC went a third way. Bravo, from Charles Simonyi and Butler Lampson in 1974, showed formatted text as it would print; Gypsy added modeless selection and cut, copy, and paste. That line
+  runs to WordStar and Word, and it split the field: word processors for documents, text editors for code. BBEdit followed on the Mac in 1992, TextMate in 2004 with language bundles, Sublime Text
+  in 2008 with a fast core and multiple cursors. Vim, Bram Moolenaar's 1991 reimplementation of vi, became the version almost everyone actually ran.
+
+  The protocol era
+
+  GitHub's Atom in 2014 built an editor out of a bundled browser; Microsoft's VS Code, in 2015, did it better and now dominates. The deeper change was the Language Server Protocol in 2016, which
+  separated language intelligence from the editor and let a language implement completion and diagnostics once for everyone. Neovim used it to reach IDE parity while keeping modal editing. Zed
+  shipped in 2023 on Rust with GPU rendering.
+
+  Model-driven tooling is reshaping the category again. The thing being edited has not changed: characters in a file, addressed by position and pattern, as in 1969.
+
+✻ Cooked for 46s
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   Opus 5  high  Session: 2.0%  3hr 24m      ⎇ no git
+   Ctx: 50.7k    Weekly: 40.0%  2d 21hr 44m  operator@example.com
+  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents

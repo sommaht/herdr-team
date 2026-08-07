@@ -10,9 +10,21 @@
 //! Touches no process and no pane. [`readiness`] is handed the *means* to read and decides what to
 //! ask for, so the I/O stays in [`crate::herdr`] and a test supplies a closure returning a literal.
 //!
-//! Locating the box is harness-agnostic and lives here once, because it is the same rule herdr's own
-//! detection applies. Everything inside it belongs to [`AgentHarness`] — today one character each,
-//! behind default methods so a harness needing more overrides rather than special-cases.
+//! **What a harness renders, and where, is that harness's own business — a caller asks it rather
+//! than carrying a number that happens to suit whichever one was measured last.** That is true
+//! twice now. Locating the composer was one shared rule until Codex turned out not to draw a box,
+//! and how far above the bottom of a pane a delivered message sits was one shared constant until
+//! Claude Code turned out to park its composer at the bottom and pad the whole gap above it. Both
+//! were a single number or rule standing in for two different renderings, and in both cases the
+//! harness it did not describe was the one that silently stopped being served.
+//!
+//! **Locating the composer is each harness's own job, and it used to be one shared rule here.**
+//! That rule — the lines between the snapshot's last two horizontal rules — is exact for a harness
+//! that draws a box and wrong for one that does not. Codex draws no border around its composer at
+//! all, and the full-width rules it does draw belong to its transcript, so the shared rule handed
+//! back a region of transcript for every Codex agent and the guard silently stopped running. The
+//! rule survives in [`prompt_box_range`], which is [`ClaudeCode`]'s locator and the last-resort
+//! check that tells one fail-open answer from the other.
 //!
 //! A new harness is an [`AgentHarness`] impl plus one entry in [`HARNESSES`].
 
@@ -86,12 +98,21 @@ impl Default for Probe {
     /// The plain-text bottom-buffer snapshot herdr's own agent detection reads, which is where every
     /// harness known today renders its composer.
     ///
-    /// Forty lines is more than any composer needs and costs nothing; only the bottom is used.
+    /// **Eighty lines, because forty was not enough and more than eighty would not help.** Sixty
+    /// lines typed into a Codex composer fill the snapshot outright: at forty there is no marker and
+    /// no rule left to find, so the composer cannot be located and the guard fails open — on exactly
+    /// the draft nobody wants to lose. Eighty reaches it.
+    ///
+    /// The limit is herdr's, not this number's. `detection` is built from the pane's own row count
+    /// and `--lines` only ever shrinks it, so this reaches further only in a pane taller than forty
+    /// rows, and a composer taller than its pane cannot be read at all. The guard fails open there
+    /// and says so. Claude Code needs none of it: it collapses a paste into
+    /// `[Pasted text #1 +13 lines]` chips, so both its borders still fit inside forty.
     fn default() -> Self {
         Self {
             source: "detection",
             format: "text",
-            lines: 40,
+            lines: 80,
         }
     }
 }
@@ -101,11 +122,26 @@ impl Default for Probe {
 /// A second source rather than a second format of the first: `detection` is handed back with its
 /// escapes already stripped, whatever `--format` asks for, so the styling this needs exists only in
 /// the renderings herdr does not normalize.
+///
+/// Its line count stays at forty while [`Probe::default`]'s rose, and deliberately: `visible` is the
+/// viewport, so a larger number would only misreport how much was actually looked at. A composer
+/// this read cannot find already produces the answer that refuses — [`suggestion_only`] returns
+/// `false` — so the shorter read costs a draft nothing.
 const STYLED: Probe = Probe {
     source: "visible",
     format: "ansi",
     lines: 40,
 };
+
+/// A delivery margin sized past any pane, for a harness whose gap scales with the terminal instead
+/// of being fixed furniture.
+///
+/// Claude Code's does — see [`ClaudeCode::delivery_margin`] — and this is also the trait default,
+/// for the reason that makes it Claude Code's value: a harness nobody has measured is far safer
+/// over-read than under-read. Under-reading has no symptom. The read succeeds, the id is simply not
+/// in what came back, and a delivered message is reported unproven. Over-reading has none either,
+/// because herdr clamps the read to what the pane holds.
+const PANE_SCALED_MARGIN: u32 = 500;
 
 /// A coding-agent CLI whose composer this tool can read.
 ///
@@ -115,15 +151,29 @@ const STYLED: Probe = Probe {
 ///
 /// The judgment methods have defaults, so an impl states only what makes it different: the deferred
 /// placeholder-vs-typed-text work overrides [`composer_occupied`](Self::composer_occupied), and a
-/// harness that renders its composer somewhere else overrides [`probe`](Self::probe). The four
-/// *declarations* — kind, marker, hook envelope, and how it spells model and effort — are required,
-/// because each is a claim about a specific host that someone has to make deliberately.
+/// harness that renders its composer somewhere else overrides [`probe`](Self::probe). The five
+/// *declarations* — kind, marker, where the composer is, hook envelope, and how it spells model and
+/// effort — are required, because each is a claim about a specific host that someone has to make
+/// deliberately.
 pub trait AgentHarness: std::fmt::Debug {
     /// herdr's own kind label for this harness, as `agent get` reports it.
     fn kind(&self) -> &'static str;
 
     /// The character this harness's composer input begins after.
     fn marker(&self) -> char;
+
+    /// Where this harness draws its composer in a snapshot, as a range over `lines`.
+    ///
+    /// Required rather than defaulted, and this one is required because of a shipped defect. It was
+    /// a single shared rule — the lines between the snapshot's last two horizontal rules — and
+    /// sharing it is what broke: Codex draws no border around its composer, and the rules it does
+    /// draw belong to its transcript, so that rule handed back a region of transcript for every
+    /// Codex agent and the guard stopped running. A harness added later must say where its own
+    /// composer sits rather than inherit an answer nobody checked against its rendering.
+    ///
+    /// `None` when this harness cannot see a composer here, which the caller reads as "not this
+    /// harness's, or not visible" and never as "empty".
+    fn composer_range(&self, lines: &[&str]) -> Option<std::ops::Range<usize>>;
 
     /// `context` wrapped the way this harness's host wants it delivered at session start.
     ///
@@ -157,6 +207,21 @@ pub trait AgentHarness: std::fmt::Debug {
         Probe::default()
     }
 
+    /// How many rows this harness draws between a delivered message and the bottom of its pane.
+    ///
+    /// The other read's counterpart to [`probe`](Self::probe): that one says what to look at to find
+    /// the *composer*, and this says how far back to look to find a *message that arrived*. Both are
+    /// questions only the harness can answer, and this one was a single module constant until the
+    /// two known harnesses turned out to differ by more than four times — see each impl.
+    ///
+    /// Defaulted rather than required, because it is a number a harness can be served safely without
+    /// stating: the default is [`PANE_SCALED_MARGIN`], which is the generous end. An impl overrides
+    /// it only to say it has been measured and needs less, and the measurement goes in its doc
+    /// comment so a later reader can tell a figure from a guess.
+    fn delivery_margin(&self) -> u32 {
+        PANE_SCALED_MARGIN
+    }
+
     /// Whether this harness's composer holds unsubmitted input.
     ///
     /// `None` when the body is not recognizable as this harness's composer — no non-empty line at
@@ -188,6 +253,37 @@ pub fn kinds() -> Vec<&'static str> {
     HARNESSES.into_iter().map(AgentHarness::kind).collect()
 }
 
+/// How far back to read this kind's pane when looking for a message that was delivered to it.
+///
+/// The seam a caller proving delivery asks, so no command carries a row count of its own. `kind` is
+/// what `agent get` or `agent start` reported.
+///
+/// **A kind this build does not know gets the most generous margin any known harness declares, not a
+/// middle one.** The two failure modes are not symmetric: reading too far costs nothing, because
+/// herdr clamps the request to what the pane holds, while reading too little reports a message that
+/// arrived as unproven and does so silently — there is no failed read to notice, the id is just
+/// absent from what came back. An unfamiliar harness that parks its composer high is exactly the
+/// case that would produce that noise.
+///
+/// Taken from [`HARNESSES`] rather than written down, so a harness added later that parks higher
+/// than any of today's raises this by existing.
+pub fn delivery_margin(kind: Option<&str>) -> u32 {
+    kind.and_then(by_kind)
+        .map_or_else(widest_delivery_margin, AgentHarness::delivery_margin)
+}
+
+/// The most generous margin any harness in [`HARNESSES`] declares.
+///
+/// [`PANE_SCALED_MARGIN`] when there are none, which is unreachable — the array is non-empty — and
+/// is the same answer the trait's own default gives, so the fallback cannot be the lenient one.
+fn widest_delivery_margin() -> u32 {
+    HARNESSES
+        .into_iter()
+        .map(AgentHarness::delivery_margin)
+        .max()
+        .unwrap_or(PANE_SCALED_MARGIN)
+}
+
 // =====================================================================================================================
 // Composer
 // =====================================================================================================================
@@ -199,9 +295,9 @@ pub enum Composer {
     Empty,
     /// The composer was located and holds unsent text.
     Occupied,
-    /// The composer could not be located: fewer than two horizontal rules in the snapshot.
+    /// No harness could locate a composer, and neither could the generic two-rule search.
     NoPromptBox,
-    /// A box was located but no known marker matched its first non-empty line.
+    /// The generic two-rule search found a box, but no harness recognized what is in it.
     UnknownMarker,
 }
 
@@ -229,12 +325,18 @@ impl Composer {
 ///
 /// `kind` is what `agent get` reported, which selects the harness. Resolution is two-tiered so an
 /// unfamiliar kind still gets a check rather than none: the reported kind's own harness answers if
-/// it recognizes the box, and anything else — an unknown kind, or a known one whose pane rendered
-/// something its harness cannot read — falls back to whichever harness does recognize it.
+/// it recognizes a composer, and anything else — an unknown kind, or a known one whose pane rendered
+/// something its harness cannot read — falls back to whichever harness does recognize one.
 ///
-/// **Fails open** in exactly two cases — the box cannot be located, or no harness recognized it.
-/// Both deliver anyway, with a warning, because a tool that refused every pane it could not parse
-/// would be unusable the first time a harness changed its rendering.
+/// **Each attempt is atomic: one harness locates the composer, and that same harness decides whether
+/// it holds anything.** Splitting those is Finding 2. [`HARNESSES`] is Claude-first, and Claude's
+/// two-rule search *succeeds* on a Codex snapshot — by bounding a region of Codex's transcript
+/// between two rules that Codex drew after tool calls. A search that took the first locator to
+/// answer would hand that region to Codex's recognition and never reach the live marker below it.
+///
+/// **Fails open** in exactly two cases — no composer could be located, or one was and no harness
+/// recognized it. Both deliver anyway, with a warning, because a tool that refused every pane it
+/// could not parse would be unusable the first time a harness changed its rendering.
 ///
 /// The answer is a snapshot, not a lock: a human can start typing between the read and the
 /// submission. Narrowing that window further would need something herdr does not expose.
@@ -249,31 +351,45 @@ pub fn readiness<E>(
     let harness = kind.and_then(by_kind);
     let probe = harness.map_or_else(Probe::default, AgentHarness::probe);
     let snapshot = read(probe.source, probe.format, probe.lines)?;
-
     let lines: Vec<&str> = snapshot.lines().collect();
-    let Some(body) = prompt_box_body(&lines) else {
-        return Ok(Composer::NoPromptBox);
-    };
 
-    // The reported kind's own harness first, then every other, so a kind this build does not know —
-    // or a known one whose pane rendered something its harness cannot read — still gets a check.
-    let occupied = harness.and_then(|harness| harness.composer_occupied(body)).or_else(|| {
-        HARNESSES
-            .into_iter()
-            .find_map(|harness| harness.composer_occupied(body))
-    });
+    // The reported kind's own harness first, then every other.
+    let recognized = harness
+        .and_then(|harness| recognize(harness, &lines))
+        .or_else(|| HARNESSES.into_iter().find_map(|harness| recognize(harness, &lines)));
+
+    let Some((harness, occupied)) = recognized else {
+        // Nothing recognized a composer, and the generic two-rule search survives only here — to
+        // say which of the two fail-open answers this is. A box nobody could read is an unknown
+        // marker; no box at all is no box at all. Neither is reported as `Empty`, because claiming
+        // an unidentified composer is empty is a guarantee this did not earn.
+        return Ok(if prompt_box_range(&lines).is_some() {
+            Composer::UnknownMarker
+        } else {
+            Composer::NoPromptBox
+        });
+    };
 
     Ok(match occupied {
         // Content in the box is not yet a draft: a harness draws its own suggestions there, and the
         // plain rendering shows them exactly as it shows typed text. Confirmed against the styled
-        // rendering before refusing, which costs a second read on the refusal path alone.
-        Some(true) if suggestion_only(&read(STYLED.source, STYLED.format, probe.lines)?) => Composer::Empty,
-        Some(true) => Composer::Occupied,
-        Some(false) => Composer::Empty,
-        // No harness recognized the box. Reported as an unknown marker rather than as `Empty`,
-        // because claiming an unidentified composer is empty is a guarantee this did not earn.
-        None => Composer::UnknownMarker,
+        // rendering before refusing, which costs a second read on the refusal path alone. The
+        // harness that recognized the plain composer locates the styled one too, so the second read
+        // cannot select a different region than the first.
+        true if suggestion_only(harness, &read(STYLED.source, STYLED.format, STYLED.lines)?) => Composer::Empty,
+        true => Composer::Occupied,
+        false => Composer::Empty,
     })
+}
+
+/// One harness's whole answer: its own locator, then its own reading of what it located.
+///
+/// `None` if either half declines, which is what keeps an attempt atomic — a harness that can find a
+/// region but not recognize what is in it has not answered, and the next harness gets the snapshot
+/// rather than that region.
+fn recognize(harness: &'static dyn AgentHarness, lines: &[&str]) -> Option<(&'static dyn AgentHarness, bool)> {
+    let range = harness.composer_range(lines)?;
+    Some((harness, harness.composer_occupied(&lines[range])?))
 }
 
 // =====================================================================================================================
@@ -314,12 +430,18 @@ fn occupied_after(marker: char, body: &[&str]) -> Option<bool> {
 /// skill name the operator typed. Colour is emphasis and faint is its opposite, so only faint can
 /// stand for text nobody wrote.
 ///
-/// Answers `false` for a box it cannot find or one whose content is not wholly faint — the caller
-/// then refuses, so every uncertainty here keeps the guard rather than dropping it.
-fn suggestion_only(styled: &str) -> bool {
+/// Answers `false` for a composer it cannot find or one whose content is not wholly faint — the
+/// caller then refuses, so every uncertainty here keeps the guard rather than dropping it. That is
+/// also what makes the shorter [`STYLED`] read safe: a draft tall enough to push the marker out of
+/// the viewport is refused rather than waved through.
+///
+/// `harness` is the one that recognized the *plain* composer, so both reads select the same region
+/// by the same rule. Locating this one generically would let the styled tier answer about a
+/// different part of the screen than the tier that asked the question.
+fn suggestion_only(harness: &dyn AgentHarness, styled: &str) -> bool {
     let read: Vec<StyledLine> = styled.lines().map(StyledLine::read).collect();
     let plain: Vec<&str> = read.iter().map(|line| line.text.as_str()).collect();
-    let Some(body) = prompt_box_range(&plain) else {
+    let Some(body) = harness.composer_range(&plain) else {
         return false;
     };
 
@@ -425,19 +547,12 @@ fn faintness_after(current: bool, parameters: &str) -> bool {
     faint
 }
 
-/// The lines between the last two horizontal rules, which is where every harness renders its
-/// composer.
+/// The lines between the last two horizontal rules.
 ///
-/// Harness-agnostic by construction, and the same region herdr's own agent detection extracts as
-/// `prompt_box_body`.
-fn prompt_box_body<'a>(lines: &'a [&'a str]) -> Option<&'a [&'a str]> {
-    Some(&lines[prompt_box_range(lines)?])
-}
-
-/// Where that body sits, for a caller holding something else indexed the same way.
-///
-/// [`suggestion_only`] locates the box in the text and then asks about the styling beside it, which
-/// needs the positions rather than the lines.
+/// [`ClaudeCode`]'s locator, and the last-resort check in [`readiness`] that tells one fail-open
+/// answer from the other. It is the same region herdr's own agent detection extracts, and it was
+/// this module's one shared rule until Finding 2 showed that a harness drawing no box is not served
+/// by a rule about boxes — see [`AgentHarness::composer_range`].
 fn prompt_box_range(lines: &[&str]) -> Option<std::ops::Range<usize>> {
     let mut rules = lines
         .iter()
@@ -473,76 +588,264 @@ fn is_horizontal_rule(line: &str) -> bool {
 mod tests {
     use super::*;
 
-    /// One fixture, the kind `agent get` reported for it, and the answer it must produce.
+    /// One scenario's two renderings, the kind `agent get` reported for it, and its answer.
+    ///
+    /// Both files, because the guard reads both and they are not the same text — the styled one is
+    /// the only place a harness's own suggestion is distinguishable from someone's draft. `styled`
+    /// is absent only for a capture taken without one, where the plain text stands in: those files
+    /// carry no escapes at all, so nothing in them can be mistaken for faint.
+    ///
+    /// `fixtures/composer/README.md` is the index of what each is there to prove.
     struct Case {
         name: &'static str,
         kind: Option<&'static str>,
-        snapshot: &'static str,
+        plain: &'static str,
+        styled: Option<&'static str>,
         expected: Composer,
     }
 
-    const CASES: [Case; 7] = [
+    /// The two renderings of one scenario, by name.
+    macro_rules! pair {
+        ($name:literal) => {
+            (
+                include_str!(concat!("../fixtures/composer/", $name, ".txt")),
+                Some(include_str!(concat!("../fixtures/composer/", $name, ".ansi.txt"))),
+            )
+        };
+    }
+
+    const CASES: [Case; 22] = [
+        // -- Codex ----------------------------------------------------------------------------
+        Case {
+            // Finding 2's regression. The rules in this snapshot are transcript, drawn after tool
+            // calls, and the composer is below them — so the answer must come from the marker and
+            // never from whatever lies between the last two rules.
+            name: "a Codex composer holding only its own placeholder, under transcript rules",
+            kind: Some("codex"),
+            plain: pair!("codex-empty").0,
+            styled: pair!("codex-empty").1,
+            expected: Composer::Empty,
+        },
+        Case {
+            name: "a typed Codex line is unsent text",
+            kind: Some("codex"),
+            plain: pair!("codex-draft").0,
+            styled: pair!("codex-draft").1,
+            expected: Composer::Occupied,
+        },
+        Case {
+            name: "a Codex draft continuing onto later lines counts as a whole",
+            kind: Some("codex"),
+            plain: pair!("codex-multiline").0,
+            styled: pair!("codex-multiline").1,
+            expected: Composer::Occupied,
+        },
+        Case {
+            // The honest "cannot see it" case: sixty typed lines fill the read and push the marker
+            // out of it, so there is nothing left to locate and the guard fails open.
+            name: "a paste taller than the read hides the composer entirely",
+            kind: Some("codex"),
+            plain: pair!("codex-pasted").0,
+            styled: pair!("codex-pasted").1,
+            expected: Composer::NoPromptBox,
+        },
+        Case {
+            // The same paste in the same pane, read far enough back to reach the marker.
+            name: "the same paste read past forty lines is the draft it is",
+            kind: Some("codex"),
+            plain: pair!("codex-pasted-tall").0,
+            styled: pair!("codex-pasted-tall").1,
+            expected: Composer::Occupied,
+        },
+        Case {
+            name: "a working Codex agent whose composer nobody has touched",
+            kind: Some("codex"),
+            plain: pair!("codex-working").0,
+            styled: pair!("codex-working").1,
+            expected: Composer::Empty,
+        },
+        Case {
+            // The queued banner opens with a block marker, and it sits *above* the live composer —
+            // so it must not disqualify the marker below it.
+            name: "queued messages above an untouched Codex composer",
+            kind: Some("codex"),
+            plain: pair!("codex-working-queued").0,
+            styled: pair!("codex-working-queued").1,
+            expected: Composer::Empty,
+        },
+        Case {
+            name: "queued messages above a Codex composer that also holds a draft",
+            kind: Some("codex"),
+            plain: pair!("codex-working-queued-draft").0,
+            styled: pair!("codex-working-queued-draft").1,
+            expected: Composer::Occupied,
+        },
+        Case {
+            // Codex draws this menu *below* the composer, where the blank-line bound keeps it out.
+            // The `/` itself is typed, so the composer really does hold unsent text.
+            name: "a Codex command menu below a composer holding the slash that opened it",
+            kind: Some("codex"),
+            plain: pair!("codex-slash-menu").0,
+            styled: pair!("codex-slash-menu").1,
+            expected: Composer::Occupied,
+        },
+        Case {
+            name: "a Codex file picker below a composer holding the path being typed",
+            kind: Some("codex"),
+            plain: pair!("codex-at-menu").0,
+            styled: pair!("codex-at-menu").1,
+            expected: Composer::Occupied,
+        },
+        Case {
+            name: "an idle Codex composer that draws both borders holds nothing",
+            kind: Some("codex"),
+            plain: include_str!("../fixtures/composer/codex-bordered-empty.txt"),
+            styled: None,
+            expected: Composer::Empty,
+        },
+        Case {
+            name: "a draft on a later line of a bordered Codex box counts too",
+            kind: Some("codex"),
+            plain: include_str!("../fixtures/composer/codex-bordered-multiline.txt"),
+            styled: None,
+            expected: Composer::Occupied,
+        },
+        // -- Claude Code ----------------------------------------------------------------------
         Case {
             name: "an idle Claude Code composer holds nothing",
             kind: Some("claude"),
-            snapshot: include_str!("../fixtures/composer/claude-empty.txt"),
+            plain: pair!("claude-empty").0,
+            styled: pair!("claude-empty").1,
             expected: Composer::Empty,
         },
         Case {
             name: "a half-written line beside the marker is unsent text",
             kind: Some("claude"),
-            snapshot: include_str!("../fixtures/composer/claude-occupied.txt"),
+            plain: pair!("claude-occupied").0,
+            styled: pair!("claude-occupied").1,
             expected: Composer::Occupied,
         },
         Case {
-            name: "an idle Codex composer holds nothing",
-            kind: Some("codex"),
-            snapshot: include_str!("../fixtures/composer/codex-empty.txt"),
-            expected: Composer::Empty,
-        },
-        Case {
-            name: "a draft on a later line of the box counts too",
-            kind: Some("codex"),
-            snapshot: include_str!("../fixtures/composer/codex-multiline.txt"),
-            expected: Composer::Occupied,
-        },
-        Case {
-            // The second tier: an unfamiliar kind still gets a check rather than none, by trying
-            // every known marker against the first non-empty body line.
-            name: "an unknown kind falls back to probing every known marker",
-            kind: Some("some-agent-this-build-has-never-heard-of"),
-            snapshot: include_str!("../fixtures/composer/codex-empty.txt"),
-            expected: Composer::Empty,
-        },
-        Case {
-            name: "a snapshot with fewer than two rules fails open",
+            name: "a Claude Code draft continuing onto later lines counts as a whole",
             kind: Some("claude"),
-            snapshot: include_str!("../fixtures/composer/no-rules.txt"),
+            plain: pair!("claude-multiline").0,
+            styled: pair!("claude-multiline").1,
+            expected: Composer::Occupied,
+        },
+        Case {
+            // The contrast with `codex-pasted`: this harness collapses a paste into chips, so both
+            // borders and the live marker still fit inside a forty-line window.
+            name: "a paste Claude Code collapsed into chips is still a draft",
+            kind: Some("claude"),
+            plain: pair!("claude-pasted").0,
+            styled: pair!("claude-pasted").1,
+            expected: Composer::Occupied,
+        },
+        Case {
+            name: "a working Claude Code agent whose composer nobody has touched",
+            kind: Some("claude"),
+            plain: pair!("claude-working").0,
+            styled: pair!("claude-working").1,
+            expected: Composer::Empty,
+        },
+        Case {
+            name: "a working Claude Code agent with a draft waiting",
+            kind: Some("claude"),
+            plain: pair!("claude-working-draft").0,
+            styled: pair!("claude-working-draft").1,
+            expected: Composer::Occupied,
+        },
+        Case {
+            // This harness writes `Press up to edit queued messages` into the composer itself,
+            // faint — so only the styled tier can tell it from a draft.
+            name: "a queued-message notice drawn inside the composer is not a draft",
+            kind: Some("claude"),
+            plain: pair!("claude-working-queued").0,
+            styled: pair!("claude-working-queued").1,
+            expected: Composer::Empty,
+        },
+        Case {
+            // The marker is echoed into the transcript above the live composer, which the two-rule
+            // locator ignores by construction — and is why this harness gets no marker scan.
+            name: "markers echoed into a Claude Code transcript are not the composer",
+            kind: Some("claude"),
+            plain: pair!("claude-transcript").0,
+            styled: pair!("claude-transcript").1,
+            expected: Composer::Empty,
+        },
+        Case {
+            // Drawn *above* the composer here, where Codex draws its own below.
+            name: "a Claude Code command menu above a composer holding the slash that opened it",
+            kind: Some("claude"),
+            plain: pair!("claude-slash-menu").0,
+            styled: pair!("claude-slash-menu").1,
+            expected: Composer::Occupied,
+        },
+        Case {
+            name: "a Claude Code file picker above a composer holding the path being typed",
+            kind: Some("claude"),
+            plain: pair!("claude-at-menu").0,
+            styled: pair!("claude-at-menu").1,
+            expected: Composer::Occupied,
+        },
+    ];
+
+    /// The fixtures that belong to neither harness, kept apart because neither kind explains them.
+    const UNCLAIMED: [Case; 2] = [
+        Case {
+            name: "a pane hosting no agent at all fails open",
+            kind: Some("claude"),
+            plain: include_str!("../fixtures/composer/no-rules.txt"),
+            styled: None,
             expected: Composer::NoPromptBox,
         },
         Case {
             name: "a box whose marker matches nothing known fails open",
             kind: None,
-            snapshot: include_str!("../fixtures/composer/unknown-marker.txt"),
+            plain: include_str!("../fixtures/composer/unknown-marker.txt"),
+            styled: None,
             expected: Composer::UnknownMarker,
         },
     ];
 
-    /// `readiness` against a fixture instead of a pane.
+    /// The last `lines` lines, which is what herdr's `--lines` hands back.
+    ///
+    /// Applied to every fixture read rather than only the pasted pair, so a probe raised or lowered
+    /// changes what these tests see — which is the whole reason the pasted pair proves anything.
+    fn tail(snapshot: &str, lines: u32) -> String {
+        let all: Vec<&str> = snapshot.lines().collect();
+        let start = all.len().saturating_sub(usize::try_from(lines).unwrap_or(usize::MAX));
+        all[start..].join("\n")
+    }
+
+    /// `readiness` against one scenario's two files instead of a pane.
     ///
     /// The whole reason the read is a closure: this module never performs I/O, so a test hands it a
-    /// literal and the read cannot fail.
-    fn against(kind: Option<&str>, snapshot: &'static str) -> Composer {
-        readiness(kind, |_source, _format, _lines| {
-            Ok::<_, std::convert::Infallible>(snapshot.to_owned())
+    /// literal and the read cannot fail. Each rendering is served from its own capture — faking the
+    /// plain one by stripping escapes off the styled one would test a text herdr never produces,
+    /// since `detection` and `visible` differ in what they wrap and how far back they reach.
+    fn against_pair(kind: Option<&str>, plain: &str, styled: Option<&str>) -> Composer {
+        readiness(kind, |source, _format, lines| {
+            let snapshot = if source == STYLED.source {
+                styled.unwrap_or(plain)
+            } else {
+                plain
+            };
+            Ok::<_, std::convert::Infallible>(tail(snapshot, lines))
         })
         .expect("reading a fixture is infallible")
     }
 
+    /// `readiness` against a fixture with no styled capture of its own.
+    fn against(kind: Option<&str>, snapshot: &str) -> Composer {
+        against_pair(kind, snapshot, None)
+    }
+
     /// `readiness` against a *styled* fixture, standing in for both renderings herdr offers.
     ///
-    /// The plain tier is served the same snapshot with its escapes removed, which is what herdr's
-    /// own `detection` source hands back — the whole reason the guard could not see the difference.
+    /// Kept for the two captures that exist only as styled text: the plain tier is served the same
+    /// snapshot with its escapes removed, which is what herdr's own `detection` source hands back.
+    /// Every scenario captured as a pair uses [`against_pair`] instead.
     fn against_styled(kind: Option<&str>, styled: &'static str) -> Composer {
         readiness(kind, |_source, format, _lines| {
             Ok::<_, std::convert::Infallible>(if format == STYLED.format {
@@ -592,8 +895,123 @@ mod tests {
 
     #[test]
     fn the_guard_answers_each_fixture_the_way_the_design_says() {
-        for case in &CASES {
-            assert_eq!(against(case.kind, case.snapshot), case.expected, "{}", case.name);
+        for case in CASES.iter().chain(&UNCLAIMED) {
+            assert_eq!(
+                against_pair(case.kind, case.plain, case.styled),
+                case.expected,
+                "{}",
+                case.name
+            );
+        }
+    }
+
+    /// Which Codex is installed must not change the answer.
+    ///
+    /// One draws both borders around its composer and one draws neither, and the same scenario has
+    /// to read the same either way — otherwise upgrading Codex silently turns the guard off.
+    #[test]
+    fn the_bordered_and_unbordered_codex_renderings_of_a_scenario_agree() {
+        for (bordered, (plain, styled), scenario) in [
+            (
+                include_str!("../fixtures/composer/codex-bordered-empty.txt"),
+                pair!("codex-empty"),
+                "an untouched composer",
+            ),
+            (
+                include_str!("../fixtures/composer/codex-bordered-multiline.txt"),
+                pair!("codex-multiline"),
+                "a draft across several lines",
+            ),
+        ] {
+            assert_eq!(
+                against(Some("codex"), bordered),
+                against_pair(Some("codex"), plain, styled),
+                "{scenario}"
+            );
+        }
+    }
+
+    /// The raised probe is what reaches a composer a paste pushed out of the window.
+    ///
+    /// The pair is the proof, not either file alone: both are the same sixty-line draft in the same
+    /// sixty-five-row pane, and the only difference is how far back the read asked for. Both are
+    /// served through a closure that truncates the way herdr's `--lines` does, so lowering the probe
+    /// back to forty turns the second answer into the first and fails here.
+    #[test]
+    fn a_paste_that_hides_the_composer_at_forty_lines_is_found_at_eighty() {
+        let short = include_str!("../fixtures/composer/codex-pasted.txt");
+        let tall = include_str!("../fixtures/composer/codex-pasted-tall.txt");
+
+        assert_eq!(against(Some("codex"), short), Composer::NoPromptBox, "nothing to see");
+        assert_eq!(
+            against_pair(
+                Some("codex"),
+                tall,
+                Some(include_str!("../fixtures/composer/codex-pasted-tall.ansi.txt"))
+            ),
+            Composer::Occupied,
+            "the same draft, read far enough back to find its marker"
+        );
+
+        // The two really are one screen read twice, which is what makes the comparison mean
+        // anything: the shorter file *is* the tail of the longer one.
+        assert_eq!(tail(tall, 40), tail(short, 40));
+        assert!(Probe::default().lines > 40, "or the pair proves nothing");
+    }
+
+    /// Claude Code needs no raised probe for the same scenario, and that is the contrast.
+    #[test]
+    fn a_paste_claude_code_collapsed_into_chips_is_still_found_inside_forty_lines() {
+        let plain = tail(include_str!("../fixtures/composer/claude-pasted.txt"), 40);
+        let styled = include_str!("../fixtures/composer/claude-pasted.ansi.txt");
+
+        let answer = readiness(Some("claude"), |source, _format, lines| {
+            Ok::<_, std::convert::Infallible>(if source == STYLED.source {
+                tail(styled, lines)
+            } else {
+                plain.clone()
+            })
+        })
+        .expect("reading a fixture is infallible");
+
+        assert_eq!(answer, Composer::Occupied);
+    }
+
+    /// A marker with transcript below it is transcript, and answering from it would be a lie.
+    ///
+    /// The only case that exercises the block-marker rejection: the untruncated fixture never asks,
+    /// because the bottom-up scan finds the live marker first. Cut the snapshot above that live
+    /// marker and the newest candidate left is an echo of an already-sent message, with the agent's
+    /// answer to it below. Reading that as someone's draft would refuse every message to this agent
+    /// and name a draft that does not exist.
+    #[test]
+    fn a_codex_marker_with_a_block_marker_below_it_is_a_past_message_rather_than_a_draft() {
+        let whole = include_str!("../fixtures/composer/codex-working.txt");
+        let above_the_composer: Vec<&str> = whole.lines().take(11).collect();
+
+        assert!(
+            above_the_composer.iter().any(|line| line.starts_with('›')),
+            "there is a candidate marker to reject"
+        );
+        assert_eq!(Codex.composer_range(&above_the_composer), None);
+
+        assert_eq!(
+            against(Some("codex"), &above_the_composer.join("\n")),
+            Composer::NoPromptBox
+        );
+    }
+
+    /// One rule and a footer is not a composer, and must not be read as one.
+    #[test]
+    fn a_snapshot_whose_only_rule_sits_above_a_footer_holds_no_composer() {
+        let snapshot = "  ⏺ Read src/main.rs (42 lines)\n\
+                        \n\
+                        ────────────────────────────────────\n\
+                        \n\
+                        \x20 ⏵⏵ accept edits on      17k tokens";
+
+        for kind in [Some("claude"), Some("codex"), None] {
+            assert_eq!(against(kind, snapshot), Composer::NoPromptBox, "{kind:?}");
         }
     }
 
@@ -632,6 +1050,100 @@ mod tests {
         assert!(Composer::Occupied.warning().is_none());
     }
 
+    /// Each attempt is one harness's locator *and* that same harness's recognition.
+    ///
+    /// The case that makes it load-bearing, and Finding 2 in miniature: Claude's two-rule locator
+    /// succeeds on a Codex snapshot, because Codex draws full-width rules in its transcript after a
+    /// tool call. A search that took the first locator to answer would hand that region of
+    /// transcript to Codex's recognition and never reach the live marker below it.
+    #[test]
+    fn a_locator_that_succeeds_for_the_wrong_harness_does_not_get_to_answer() {
+        let codex = include_str!("../fixtures/composer/codex-empty.txt");
+        let lines: Vec<&str> = codex.lines().collect();
+
+        let claudes = ClaudeCode
+            .composer_range(&lines)
+            .expect("claude's locator finds two rules here, which is the trap");
+        let codexs = Codex
+            .composer_range(&lines)
+            .expect("and the live composer is elsewhere");
+        assert_ne!(claudes, codexs, "the two locators disagree, which is the whole point");
+
+        // Reported as `claude`, so Claude's locator runs first — and its own recognition declines
+        // the transcript it found, which is what sends the snapshot on rather than the region.
+        assert_eq!(
+            against_pair(
+                Some("claude"),
+                codex,
+                Some(include_str!("../fixtures/composer/codex-empty.ansi.txt"))
+            ),
+            Composer::Empty
+        );
+    }
+
+    /// An unknown kind is read at least as far back as every known one, never a middle distance.
+    ///
+    /// The two failures are not symmetric. Reading too far costs nothing — herdr clamps the request
+    /// to what the pane holds — while reading too little reports a message that arrived as unproven,
+    /// and does it silently: the read succeeds and the id is simply not in it. So the kind this build
+    /// cannot identify gets the most generous window, and a harness added later that parks higher
+    /// than any of today's raises that window by existing rather than by anyone remembering to.
+    #[test]
+    fn an_unrecognized_kind_is_read_as_far_back_as_the_most_generous_harness() {
+        let unknown = delivery_margin(Some("some-agent-shipped-next-year"));
+
+        for harness in HARNESSES {
+            assert!(
+                unknown >= harness.delivery_margin(),
+                "{} is read further back than an unrecognized kind",
+                harness.kind()
+            );
+        }
+        assert_eq!(unknown, widest_delivery_margin());
+        assert_eq!(delivery_margin(None), unknown, "a pane hosting no agent, likewise");
+    }
+
+    /// A harness that states nothing is served the generous end rather than the convenient one.
+    #[test]
+    fn the_trait_default_is_the_most_generous_value_rather_than_a_middle_one() {
+        #[derive(Debug)]
+        struct Unmeasured;
+
+        impl AgentHarness for Unmeasured {
+            fn kind(&self) -> &'static str {
+                "unmeasured"
+            }
+            fn marker(&self) -> char {
+                '#'
+            }
+            fn composer_range(&self, _lines: &[&str]) -> Option<std::ops::Range<usize>> {
+                None
+            }
+            fn hook(&self, context: &str) -> Result<String, serde_json::Error> {
+                session_start(context)
+            }
+            fn tuning(&self, _model: Option<&str>, _effort: Option<&str>) -> Vec<String> {
+                Vec::new()
+            }
+        }
+
+        assert_eq!(Unmeasured.delivery_margin(), PANE_SCALED_MARGIN);
+        assert!(Unmeasured.delivery_margin() >= widest_delivery_margin());
+    }
+
+    /// The two known harnesses differ by more than four times, which is why this is not a constant.
+    #[test]
+    fn each_harness_answers_the_read_distance_its_own_rendering_calls_for() {
+        let codex = delivery_margin(Some("codex"));
+        let claude = delivery_margin(Some("claude"));
+
+        assert!(
+            claude >= codex * 4,
+            "one harness pads down to the bottom of its pane and the other stops at its transcript; \
+             a single number would over-read one and under-read the other"
+        );
+    }
+
     /// A known kind whose pane rendered a marker it does not own fails open, not closed.
     ///
     /// Regression: resolving the marker from the reported kind proved nothing about what the pane
@@ -643,7 +1155,10 @@ mod tests {
         // A codex box reported as claude: claude's harness cannot read it, codex's can, and the
         // answer comes from the one that recognized it rather than from the label.
         assert_eq!(
-            against(Some("claude"), include_str!("../fixtures/composer/codex-empty.txt")),
+            against(
+                Some("claude"),
+                include_str!("../fixtures/composer/codex-bordered-empty.txt")
+            ),
             Composer::Empty
         );
         // Nothing recognizes this one, so it fails open rather than being called occupied.

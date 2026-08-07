@@ -34,6 +34,10 @@ composer holding someone's unsent text, and an agent still working or blocked. N
 changes anything, and both exit 5. Neither clears on a timer either — a composer is cleared by the
 person typing into it — so the retry belongs after the named state changes, not on a loop.
 
+`msg --wait-until` waits for the states you name, and against a target that is already working it
+waits out the turn in progress rather than the queued message's own; delivery itself is proven by
+reading the target's pane for the message, never by the wait having matched.
+
 The command was called `prompt` until it started wrapping what it sends, and `msg` still answers to
 that name. So does `spawn --prompt`, now `--msg`.
 
