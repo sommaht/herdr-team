@@ -187,6 +187,32 @@ A defect rather than a deferral: understood, reproduced, and not yet fixed.
   composer. There is no fix inside this tool that does not amount to answering someone's security
   prompt for them, which is why it is recorded rather than worked around.
 
+- **A composer taller than its pane cannot be read, so the guard fails open on the draft it most
+  ought to protect.** The guard finds a composer by looking at the bottom of a terminal snapshot,
+  and herdr sizes that snapshot to the pane's own row count — a request for more rows finds more
+  only in a pane that has them. Paste sixty lines into a Codex composer in a forty-row pane and
+  every row of the snapshot is draft: no marker, no border, nothing to locate. The message is
+  delivered with a warning, over the top of the paste. Reading further is not available: the
+  rendering that carries a composer's styling is the viewport and stops at the pane's edge. Nobody
+  minds losing four typed words, which is what makes this the wrong way round.
+
+- **`--wait-until` against an agent that is already working waits out whatever turn is running, not
+  the one your message starts.** herdr's check after a submission compares state-change sequence
+  numbers rather than turns, so the turn that was already in progress satisfies it by ending. A
+  message sent to a busy agent is queued behind an unknown amount of work, and nothing this CLI can
+  ask distinguishes that work finishing from your own message being answered. Delivery is still
+  proven — the pane is read for the message's own id — so `delivered` means what it says; it is the
+  *wait* that cannot promise whose turn it waited for. Against a settled agent there is no
+  ambiguity, because the submission establishes a turn that began after it.
+
+- **A `--timeout` of 5000ms or less silently switches off the re-send repair.** A prompt submitted
+  within a few seconds of an agent starting is sometimes swallowed, and the repair is to notice and
+  send once more. Noticing depends on herdr reporting a stalled prompt rather than a plain timeout,
+  and it only does so when the wait it was given is longer than its own five-second window. So the
+  shortest leashes lose the repair that short-lived agents need most. Deliberate rather than
+  overlooked — the alternative is spending more time than the caller allowed — and worth knowing
+  before choosing a small number.
+
 ## Roadmap
 
 Each of these is a decision to defer, not an oversight.
