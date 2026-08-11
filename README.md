@@ -1,33 +1,135 @@
 # herdr-team
 
-Launching a [herdr](https://herdr.dev) agent by hand is two steps: herdr starts an agent only in a
-pane that already exists and is sitting at an interactive shell prompt, so you create a surface,
-dig the new pane's id out of the JSON, and then start the agent in it. This does both in one
-command, resolves the agent's kind and its usual flags from a named agent in the config, and takes
-message text on stdin. It runs with no config at all: `--kind` names a herdr agent kind directly.
+## What is this?
+
+A companion CLI for [herdr](https://herdr.dev) that improves the experience of launching and
+messaging agents inside it.
+
+herdr starts an agent only in a pane that already exists and is sitting at a shell prompt, so
+launching one by hand means creating a surface, digging the pane id out of the JSON, and starting
+the agent in it. And once agents are talking to each other, a bare string in a composer says
+nothing about who sent it or how to answer. `herdr-team` closes both gaps:
+
+- **`spawn`** — from nothing to a running agent in one command.
+  - Starts the agent in a new pane, tab, or workspace.
+  - Starts a named agent configuration from a config file: kind, flags, model, effort, and a
+    standing brief.
+  - Creates a git worktree on a new branch and starts the agent inside it.
+  - Takes a multiline first message through stdin.
+- **`msg`** — messaging with explicit delivery evidence.
+  - Wraps every message in an envelope naming who sent it.
+  - Proves delivery from an observed state change or pane read, and warns when proof is
+    unavailable; `--no-verify` skips the check.
+  - Appends an automatic how-to-reply block when a reply is invited, so the recipient answers
+    with a working command instead of guessing at one.
+
+## Installation
+
+```
+git clone https://github.com/sommaht/herdr-team.git && cd herdr-team
+cargo install --path .
+```
+
+### Session-start hook
+
+`prime` prints a brief teaching an agent to drive this CLI, and `--hook <harness>` wraps it in
+that harness's session-start envelope. For Claude Code, add it to `~/.claude/settings.json` to
+cover every local project, or to `.claude/settings.json` to cover one repository:
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          { "type": "command", "command": "herdr-team prime --hook claude", "timeout": 10 }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Every Claude Code session in that scope — including ones this tool spawns — then starts already
+knowing the commands. The hook makes no herdr call and cannot fail: a config it cannot read
+costs the agent table and nothing else. `--hook codex` is experimental: it emits the same
+envelope, but Codex context injection has not been established here.
+
+### Agent configuration
+
+A config defines reusable agent configurations — a kind, its flags, a model and effort, a
+standing brief — under names of your choosing. `<name>` names the running agent; `--agent
+<name>` selects a configured definition, and a bare `spawn <name>` starts the config's
+`default`. With the worked config, `herdr-team spawn reviewer --agent opus` starts an agent
+named `reviewer` from the `opus` definition.
+
+Copy [`examples/config.toml`](examples/config.toml) to
+`$XDG_CONFIG_HOME/herdr-team/config.toml` (falling back to `~/.config/herdr-team/config.toml`)
+and edit. The [Agents](#agents) section covers the format, inheritance, and the repository
+layer. None of it is required: `spawn <name> --kind claude` works with no config at all.
+
+## Examples
+
+Launch a reviewer in its own tab and hand it the diff:
+
+```
+git diff | herdr-team spawn reviewer --placement tab --agent opus --msg -
+```
+
+Give an agent a worktree of its own, on a named branch — then hand it work once its trust
+prompt is answered (see [Known issues](#known-issues)):
+
+```
+herdr-team spawn fixer --placement worktree --branch fix/flaky-test
+herdr-team msg fixer "make the suite green"
+```
+
+Message an agent; the command returns after proving delivery, or warns that proof was
+unavailable:
+
+```
+herdr-team msg reviewer "also check the error paths"
+```
+
+Dispatch work and block until it finishes. Name both terminal states — a harness settling to
+`done` never reaches `idle`, and one alone times out on work that is done — and invite no reply:
+
+```
+herdr-team msg reviewer "run the tests" --no-reply --wait-until idle --wait-until done
+```
+
+Fan out across areas, each reporting back to the pane that spawned it:
+
+```
+for area in api web cli; do
+  herdr-team spawn "$area" --placement tab \
+    --msg "audit the $area surface" --reply-to "$HERDR_PANE_ID"
+done
+```
+
+What the recipient of a `msg` actually sees:
+
+```
+<mail from="dispatcher" id="k7m2x9">
+audit the CLI surface and list what is undocumented
+</mail>
+<how-to-reply>
+herdr-team msg w4:p3 --no-reply - <<'EOF'
+{{your reply}}
+EOF
+</how-to-reply>
+```
 
 ## Commands
 
 | Command | Purpose |
 | ------- | ------- |
-| `spawn` | Create a pane, tab, or workspace and start a configured agent in it |
+| `spawn` | Create a pane, tab, workspace, or worktree and start an agent in it |
 | `msg` | Deliver a message to an agent that already exists |
 | `kill` | Close an agent's pane, refusing one that is mid-task |
 | `agents` | List what the config holds |
 | `prime` | Print an agent-facing brief on driving this CLI |
-
-`prime` is written for a session-start hook. `--hook <harness>` asks that harness to wrap the brief
-in its host's envelope; each harness owns its own shape, so a host whose contract differs is one impl
-rather than a flag change. It makes no herdr call and a config it cannot read costs the agent table
-and nothing else, because a hook that fails is worse than one that says little.
-
-```
-herdr-team spawn reviewer --placement tab --agent opus --msg "Review the branch"
-herdr-team spawn scratch --kind codex
-git diff | herdr-team msg reviewer -
-herdr-team kill reviewer
-herdr-team agents
-```
 
 `msg` and `kill` each refuse one thing by default, and `--force` is the override for both: a
 composer holding someone's unsent text, and an agent still working or blocked. Neither refusal
@@ -115,6 +217,8 @@ the brief is delivered alone and unwrapped, which invites no reply — so `--no-
 ## The repository layer
 
 A repository may carry its own config, found by walking up from the directory a spawn is run in.
+The walk does not stop at a repository boundary — it continues to the filesystem root, so a config
+in a directory above your checkout still applies.
 Either `.herdr-team/config.toml` or `.herdr-team.config.toml` — the directory when an
 agent's `prompt_file` wants somewhere to live beside the config that names it, the flat file when
 one file is the whole config. Both are tried at each directory on the way up, so the nearer one
@@ -213,12 +317,17 @@ A defect rather than a deferral: understood, reproduced, and not yet fixed.
   overlooked — the alternative is spending more time than the caller allowed — and worth knowing
   before choosing a small number.
 
+- **A message taller than herdr's read window cannot have its delivery proven.** Delivery is proven
+  by reading the pane back for the message's own id, and herdr clamps any read at 1,000 lines. A
+  message longer than that can scroll its own id out of reach, so it is reported unproven even when
+  it landed. The report is honest — `--no-verify` is the escape for callers who already trust the
+  submission — but a very long message and a proven delivery cannot currently be had together.
+
 ## Roadmap
 
 Each of these is a decision to defer, not an oversight.
 
-- **Witnessed delivery** — proving a message was received rather than that it was submitted.
-- **Spawning somewhere other than here** — `spawn` infers where it is from the environment, so it
+- **Choosing a different pane to split** — `spawn` infers where it is from the environment, so it
   can only split the pane it runs in, and only when it runs in one. A flag naming a pane would let a
   caller outside a session split anyway, and one inside anchor somewhere other than itself.
 - **Ending an agent while keeping its pane** — `kill` closes the pane, so the seat goes with the
