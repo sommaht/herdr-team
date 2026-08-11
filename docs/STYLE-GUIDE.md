@@ -35,6 +35,41 @@ Standard skeleton when the section exists: `Constants` at top, one heavyweight h
 domain group, `Helpers` for file-wide utilities, `Tests` for the inline `#[cfg(test)]` module.
 Lightweight sub-headers are earned, not automatic.
 
+## Comments
+
+Rustdoc on the public surface; `//` in bodies only where the why is not visible in the code.
+
+**One line is the default.** The first line says what the item is, for a reader who knows
+nothing. A doc earns a second paragraph only by naming behavior a caller can observe and would
+be surprised by — a quirk in how it works, not the reasoning behind it. If you can't say what
+the surprise is, stop at the first line.
+
+Gate rules that demand a justification (RS-002, RS-010, RS-020, RS-050) are satisfied by one
+line. A justification that won't fit in one line is an argument against the code, not a longer
+comment.
+
+### Never write
+
+- **Origin stories.** What the code replaced, what was considered and rejected, why the
+  alternative would have been wrong. Git owns history; a decision worth recording goes in this
+  guide or the README, once.
+- **Placement justifications.** Why an item lives in this module, or above or below its
+  neighbor.
+- **Restatements of the signature.** The return type already says it's an `Option`; a typed
+  error's name already states its condition. An `# Errors` section is one line, and only when
+  the condition isn't evident from the error type.
+- **Architecture this guide already states.** Module responsibilities, the seam discipline,
+  the validation policy — said once, here. A module doc is a line or two naming what the
+  module owns.
+- **Anything a rename would delete.** A comment that exists to correct a name means the name
+  is the bug. Prose defending a workaround means the code should be fixed instead.
+
+Tests follow the same rule: the test name carries the claim, and a body comment appears only
+when the setup isn't self-evident.
+
+Known problems and operational quirks worth keeping do not live in comments — they go in the
+README's **Known issues** section, where the next person actually looks.
+
 ## Module map
 
 - **`core`** — what every other module shares, and deliberately little: `PaneId`,
@@ -250,10 +285,8 @@ decision with a document, not a call someone adds.
 `cargo test --all-targets`, `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps`, and
 `bash .claude/skills/rust-style/scripts/check.sh src`.
 
-The rustdoc one earns its place by catching a class none of the others can see. Doc comments
-here carry the reasoning behind decisions and link the types that reasoning names, so a link
-that stops resolving is the first sign a doc has outlived its code — a variant that moved
-between enums, a helper that was renamed.
+The rustdoc one catches a class none of the others can see: doc comments link the types they
+name, so a link that stops resolving is the first sign a doc has outlived its code.
 
 Verification claims name the command that produced them, and static checks are reported
 separately from any manual rehearsal against a live herdr session — nothing above exercises a

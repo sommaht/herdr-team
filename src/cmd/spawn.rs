@@ -1,13 +1,4 @@
 //! `spawn` — create a surface and start a configured agent in it.
-//!
-//! The longest file here because it is the longest command: five ordered steps across four
-//! placements, each of which can fail after the previous one has already changed something in herdr.
-//! It reads as one transaction, so splitting it would hide that ordering and it stays one file.
-//!
-//! [`anchor`] and [`SpawnArgs::workspace`] together answer "where is the caller", which is a real
-//! boundary rather than a line-count one — it is what a `--from` flag would override, and that is the
-//! day they move. Until something other than this flow asks that question they are steps of the flow
-//! directly above them, and a reader following `execute` finds them where they are used.
 
 use std::fmt::Display;
 use std::path::{Path, PathBuf};
@@ -31,10 +22,6 @@ use crate::herdr::{HerdrError, HerdrRef, PANE_VARIABLE};
 // =====================================================================================================================
 
 /// How long `agent start` is retried while the new pane's shell is still starting, in milliseconds.
-///
-/// Finding 3: creating a tab or workspace races with slow shell init, and herdr correctly refuses a
-/// pane that has not reached its prompt. Ten seconds covers a shell running a directory-environment
-/// hook without leaving a caller hanging on one that is genuinely broken.
 const DEFAULT_SETTLE_MS: u64 = 10_000;
 
 // =====================================================================================================================
@@ -64,11 +51,6 @@ pub struct SpawnArgs {
 
     /// Where the agent's pane comes from: a split of the calling pane, which needs `HERDR_PANE_ID`,
     /// or the root pane of a new tab, workspace, or Git worktree cut from `--cwd`.
-    // Not a doc comment: a field's doc comment on this struct is its `--help` text, and why the
-    // default is a string is not something a caller needs. `default_value_t` would want a `Display`
-    // on `Placement` whose only consumer is this line, and which has to agree with the value parser
-    // to work at all. A parse with no `--placement` exercises the string, so a typo in it fails a
-    // test rather than reaching a caller.
     #[arg(long, value_enum, default_value = "pane")]
     placement: Placement,
 
@@ -89,10 +71,6 @@ pub struct SpawnArgs {
     /// The zero-config route: everything a config would have supplied is then said on the line, with
     /// `-- <agent args>` carrying the flags. Passed to herdr untouched, so a kind this build has
     /// never heard of works the day herdr learns it.
-    // Not validated here, for the reason the config's `kind` field is a plain `String`: herdr answers
-    // `unsupported_agent_kind` from its own compile-time list, and restating that list would drift.
-    // The conflicts are refusals rather than precedence, per the rule `--branch` follows — a flag
-    // that is silently ignored is a caller who never learns what did not happen.
     #[arg(long, value_name = "KIND", conflicts_with_all = ["agent", "config"])]
     kind: Option<String>,
 
@@ -109,10 +87,8 @@ pub struct SpawnArgs {
     /// A first message to deliver once the agent is up; `-` reads it from stdin.
     ///
     /// Wrapped in the same envelope `msg` sends, which is why the reply flags below apply to it.
-    // `allow_hyphen_values` for the reason given on `msg`'s own text argument: text opening with
-    // `--` must be delivered rather than echoed back in a parser diagnostic. `--` cannot repair it
-    // here at all — that separator already belongs to `agent_args`. `--prompt` is the spelling this
-    // carried until the command was renamed, kept working and kept out of the help.
+    // `--` already belongs to `agent_args`, so this option must take hyphen-leading text on its own;
+    // `--prompt` is the pre-rename spelling, kept working and kept out of the help.
     #[arg(long, alias = "prompt", value_name = "TEXT", allow_hyphen_values = true)]
     msg: Option<MaybeStdin<NonEmptyText>>,
 
@@ -148,19 +124,9 @@ pub struct SpawnArgs {
 impl SpawnArgs {
     /// The workspace a new tab opens in: the calling pane's, as herdr currently reports it.
     ///
-    /// Asked of herdr rather than read from `HERDR_WORKSPACE_ID`. That variable is injected once, when
-    /// the pane is created, and nothing can rewrite a running shell's environment afterwards — so a
-    /// pane moved to another workspace still carries the old id and would send this tab there.
-    ///
-    /// `None` is the one case nothing can pin: no calling pane at all, which is a caller outside a
-    /// herdr session. herdr's default then applies, and it resolves to whichever workspace the *UI*
-    /// has focused — so a tab meant for this project opens wherever the human last clicked. Warned
-    /// about rather than left silent, because that outcome looks like a bug in this tool.
-    ///
-    /// # Errors
-    ///
-    /// [`SpawnError::Herdr`] if herdr cannot answer for a pane this is running in, which happens
-    /// before any surface exists.
+    /// Asked of herdr rather than read from `HERDR_WORKSPACE_ID`, which goes stale when a pane moves
+    /// workspaces. `None` when there is no calling pane; herdr then uses whichever workspace the UI
+    /// has focused, which the warning names.
     fn workspace(&self, sink: &Sink) -> Result<Option<String>, SpawnError> {
         let pane = std::env::var(PANE_VARIABLE)
             .ok()
@@ -177,16 +143,7 @@ impl SpawnArgs {
     /// The caller's own directory relative to its repository root, for a worktree spawn to reopen
     /// at.
     ///
-    /// One read-only herdr call, made before anything is created, and only for the placement that
-    /// has a second checkout to map into. `None` from a caller already at the repository root, which
-    /// skips the placement step rather than running a no-op `cd`.
-    ///
-    /// # Errors
-    ///
-    /// [`SpawnError::Herdr`] when herdr cannot resolve a repository for `cwd` — `not_git_worktree`
-    /// for a caller outside one. That refusal now arrives here rather than from `worktree create`,
-    /// which is where a precondition belongs: nothing has been created yet, so a rejected command
-    /// has changed nothing.
+    /// `None` for the non-worktree placements and for a caller already at the repository root.
     fn subdirectory(&self, cwd: &str) -> Result<Option<String>, SpawnError> {
         if self.placement != Placement::Worktree {
             return Ok(None);
@@ -195,10 +152,6 @@ impl SpawnArgs {
     }
 
     /// Where the first prompt says a reply should go.
-    ///
-    /// The flags are declared here rather than flattened in from `prompt` — a shared group would put
-    /// both commands' flags in one help section — but the decision they encode is
-    /// [`Reply::from_flags`]'s, so a first prompt cannot mean something different by them.
     fn reply(&self) -> Reply {
         Reply::from_flags(self.reply_to.as_deref(), self.no_reply)
     }
@@ -210,17 +163,7 @@ impl SpawnArgs {
 
     /// Refuses `--branch` or `--base` under a placement with no worktree to apply them to.
     ///
-    /// clap cannot express this: `conflicts_with` takes an argument id, not a value predicate, so
-    /// "valid only when `--placement` is `worktree`" has nowhere to live but a pre-check. It runs
-    /// among the others, before anything exists, which is what keeps it a pre-check.
-    ///
-    /// Ignoring the flag was the alternative and is worse. A caller templating `--branch` into
-    /// every spawn would never learn that the isolation it asked for did not happen — and a wrong
-    /// answer nobody is told about is the failure this whole tool is shaped to avoid.
-    ///
-    /// # Errors
-    ///
-    /// [`SpawnError::WorktreeOnlyFlag`], naming the flag and the placement that would honor it.
+    /// A pre-check because clap's `conflicts_with` takes an argument id, not a value predicate.
     fn check_worktree_flags(&self) -> Result<(), SpawnError> {
         if self.placement == Placement::Worktree {
             return Ok(());
@@ -235,20 +178,7 @@ impl SpawnArgs {
 
     /// Refuses a reply flag on a spawn with no message for it to shape.
     ///
-    /// Both flags describe an envelope, and a spawn with no `--msg` delivers none: an agent's brief
-    /// is instructions from a config file rather than mail, so it names no sender and invites no
-    /// answer. Refused rather than ignored, for the reason `--branch` under the wrong placement is —
-    /// a caller templating `--reply-to` onto every spawn would otherwise never learn that the report
-    /// it is waiting for was never asked for.
-    ///
-    /// clap cannot express this either: `requires` would fire on the argument being *present*, which
-    /// is the right shape, but it would then also reject the `--placement worktree` spawn that means
-    /// to deliver nothing at all. The predicate is about a second argument's absence, so it lives
-    /// here among the other pre-checks.
-    ///
-    /// # Errors
-    ///
-    /// [`SpawnError::ReplyFlagWithoutMessage`], naming the flag and what it needs.
+    /// A pre-check because clap's `requires` cannot condition on another argument's absence.
     fn check_reply_flags(&self) -> Result<(), SpawnError> {
         if self.msg.is_some() {
             return Ok(());
@@ -263,13 +193,7 @@ impl SpawnArgs {
 
     /// Refuses a flag this build renamed, naming what replaced it.
     ///
-    /// Not left to clap: its suggestion machinery scores `--preset` too far from `--agent` to offer
-    /// it, so the rejection a caller would otherwise meet says only that the argument is
-    /// unrecognized.
-    ///
-    /// # Errors
-    ///
-    /// [`SpawnError::RenamedFlag`].
+    /// Not left to clap, whose suggestion machinery scores `--preset` too far from `--agent` to offer it.
     fn check_renamed_flags(&self) -> Result<(), SpawnError> {
         if self.preset.is_some() {
             return Err(SpawnError::RenamedFlag { old: "--preset", new: "--agent" });
@@ -279,21 +203,7 @@ impl SpawnArgs {
 
     /// What to start: the kind `--kind` named, or the agent the config resolves.
     ///
-    /// `--kind` reads no config at all, which is the point of it. A caller naming a kind has said
-    /// everything a config would have said, and a config that is missing or malformed must not break
-    /// the one route that needs nothing from it — the same stance `msg` takes by never loading one.
-    ///
-    /// A scalar the config declares is overridden and a vector is extended, here as in a `base`
-    /// chain: `--kind` replaces the kind outright, while `-- <agent args>` follows the agent's own
-    /// flags rather than replacing them. Agent CLIs are last-flag-wins, so appending *is* overriding
-    /// — and it leaves adding one flag a one-token edit instead of a restatement of all of them.
-    ///
-    /// # Errors
-    ///
-    /// [`SpawnError::NoConfig`] when there is no config to resolve against, [`SpawnError::Config`]
-    /// for every other config failure — a file that will not parse, an agent that does not exist, or
-    /// a brief that cannot be read. The brief is read here, among the pre-checks, so a missing one is
-    /// refused while a refusal is still free rather than after a surface exists.
+    /// `--kind` reads no config at all, so a missing or malformed file cannot break that route.
     fn configured(&self, cwd: &Path, sink: &Sink) -> Result<Configured, SpawnError> {
         if let Some(kind) = &self.kind {
             return Ok(Configured {
@@ -316,28 +226,13 @@ impl SpawnArgs {
     }
 
     /// Makes the surface this placement calls for, and reports the checkout when it made one.
-    ///
-    /// Named rather than inlined into [`execute`](Cmd::execute) because it is the one step with a
-    /// shape of its own: four placements, one of which produces a second thing worth reporting.
-    /// `execute` keeps the ordering the transaction depends on, and this keeps the branching, so
-    /// neither has to be read for the other's sake.
-    ///
-    /// `anchor` is resolved by the caller because it is a *pre-check* — a `--placement pane` with
-    /// no calling pane has to fail before this runs, not inside it.
-    ///
-    /// # Errors
-    ///
-    /// [`SpawnError::Herdr`] if herdr refused to make the surface, or [`SpawnError::MissingAnchor`]
-    /// for the split that arrived without one.
     fn create_surface(
         &self,
         anchor: Option<PaneId>,
         cwd: &str,
         sink: &Sink,
     ) -> Result<(PaneId, Option<Checkout>), SpawnError> {
-        // Only the worktree arm has a second thing to report. `--cwd` means the source checkout
-        // there rather than the pane's own directory, and no workspace is pinned: a worktree brings
-        // its own, and herdr resolves the source from the path instead.
+        // The worktree brings its own workspace, so unlike a tab none is pinned for it.
         match (self.placement, anchor) {
             (Placement::Pane, Some(anchor)) => Ok((surface::split(&anchor, cwd, self.focus())?, None)),
             (Placement::Tab, _) => {
@@ -366,8 +261,7 @@ impl Cmd for SpawnArgs {
     type Ok = Spawned;
     type Err = SpawnError;
 
-    /// Pre-checks, config, surface, agent, first prompt — in that order, because a pre-check that
-    /// runs after a surface exists is not a pre-check.
+    /// Pre-checks, config, surface, agent, first prompt — in that order.
     fn execute(self, sink: &Sink) -> Result<Self::Ok, Self::Err> {
         // `AgentName` derefs to `str`, so this compares the name itself rather than the newtype.
         if &*self.name == OPERATOR {
@@ -381,37 +275,28 @@ impl Cmd for SpawnArgs {
             Placement::Tab | Placement::Workspace | Placement::Worktree => None,
         };
 
-        // Resolved before the config, because it is where the repository layer's walk starts: the
-        // config that applies is the one belonging to the tree this agent will work in.
+        // Resolved before the config: the config that applies belongs to the tree the agent works in.
         let cwd = match &self.cwd {
             Some(path) => path.clone(),
             None => std::env::current_dir().map_err(SpawnError::NoWorkingDirectory)?,
         };
 
-        // `as_path`, not `&cwd`: `Option<&PathBuf>` does not coerce to `Option<&Path>`.
         let configured = self.configured(cwd.as_path(), sink)?;
 
         let cwd = cwd.to_string_lossy().into_owned();
 
-        // Read before anything is created, so a caller outside a repository is refused while a
-        // refusal is still free.
         let subdirectory = self.subdirectory(&cwd)?;
 
         // Everything above is read-only, so nothing exists yet if any of it failed.
         let (pane, worktree) = self.create_surface(anchor, &cwd, sink)?;
 
-        // From here on a failure leaves the pane open and names it: whatever went wrong is on
-        // screen in it, and closing it would throw the error away with it. Every step past this
-        // point is inside one call, so that note has one owner rather than a wrapper per step.
+        // From here on a failure leaves the pane open and names it.
         self.start_and_prompt(&pane, &configured, worktree, subdirectory.as_deref(), sink)
             .map_err(|error| error.note_open_pane(&pane))
     }
 }
 
 /// What this spawn settled on for the agent it starts.
-///
-/// One value rather than three parameters, because they are one answer — the agent `--agent` named
-/// or the kind `--kind` did — and they are read together at the single call site that starts it.
 struct Configured {
     /// The agent kind, passed to `agent start --kind` untouched.
     kind: String,
@@ -425,8 +310,7 @@ impl SpawnArgs {
     /// Places the pane, starts the agent, retrying one whose shell has not settled, then delivers
     /// the first prompt if there is one.
     ///
-    /// Everything that happens after the surface exists, which is what makes it the one place the
-    /// caller's `note_open_pane` has to wrap.
+    /// Everything that happens after the surface exists — the region `note_open_pane` wraps.
     fn start_and_prompt(
         &self,
         pane: &PaneId,
@@ -435,16 +319,14 @@ impl SpawnArgs {
         subdirectory: Option<&str>,
         sink: &Sink,
     ) -> Result<Spawned, SpawnError> {
-        // Before the agent, because `agent start` inherits the shell's directory — after it, the
-        // shell would move and the agent would not.
+        // Before the agent: `agent start` inherits the shell's directory at launch.
         if let (Some(checkout), Some(relative)) = (&worktree, subdirectory) {
             self.open_subdirectory(pane, &checkout.path, relative, sink)?;
         }
 
         let started = self.start_when_settled(pane, &configured.kind, &configured.args)?;
 
-        // One submission whatever it holds: an agent handed two would answer the first before it
-        // heard the second.
+        // One submission whatever it holds: an agent handed two answers the first before hearing the second.
         let Some(delivery) = first_delivery(configured.brief.clone(), self.msg.as_deref().cloned()) else {
             return Ok(Spawned {
                 placement: self.placement,
@@ -454,22 +336,16 @@ impl SpawnArgs {
             });
         };
 
-        // No composer guard here: no human has touched the pane this just created, and the
-        // submission follows `agent start` immediately.
+        // No composer guard here: no human has touched the pane this just created.
         //
-        // `prompt`'s problem is met here too, and by the same rule: an agent that came up working
-        // has no state change left for herdr to match, so its pane is read for the message instead.
+        // An agent that came up working leaves herdr no state change to match, so its pane is read
+        // for the message instead.
         let proof = Proof::for_delivery(started.status(), DEFAULT_SETTLE_MS);
-        // From herdr's own detection rather than from `configured.kind`, which is what was asked
-        // for: the pane being read is the one herdr identified, and that is whose rendering the
-        // margin describes.
+        // herdr's own detection, not `configured.kind`: the margin describes the pane herdr identified.
         let margin = crate::harness::delivery_margin(started.kind());
         let submission = deliver(pane, &delivery, &self.reply(), &proof, margin, sink)?;
 
-        // Said out loud rather than left to the `delivered` field, which only the `--json` reader
-        // sees — a caller reading the one line would otherwise wait forever on work that was never
-        // proven to start. Worded for both ways the pane proof comes up empty: a message the pane
-        // never showed, and a brief carrying no id that could have been looked for.
+        // Warned out loud: only the `--json` reader sees the `delivered` field.
         if !submission.proven {
             sink.warn(&format!(
                 "{} was already working when its first prompt was sent, so delivery is unproven",
@@ -487,15 +363,7 @@ impl SpawnArgs {
 
     /// `agent start`, retried while herdr says the pane is not yet an available shell.
     ///
-    /// Finding 3: twice in six launches, `agent start` refused a just-created pane because its
-    /// shell had not reached its prompt. herdr is right to refuse; the caller has to retry rather
-    /// than abandon the seat. Every *other* failure returns immediately.
-    ///
-    /// The retry is silent. A `direnv` or `nvm` in the shell's rc file makes it fire on essentially
-    /// every launch, so a diagnostic here would be printed on the success path almost always —
-    /// which is not a warning but a progress indicator, and under `--json` an object every caller
-    /// skips. What a caller needs is the case where retrying did not help, and
-    /// [`SpawnError::PaneNeverSettled`] carries that with the budget it exhausted.
+    /// The retry is silent: a shell-init hook like `direnv` makes it fire on almost every launch.
     fn start_when_settled(&self, pane: &PaneId, kind: &str, agent_args: &[String]) -> Result<AgentRecord, SpawnError> {
         for delay in Backoff::within(self.settle_timeout) {
             match agent::start(&self.name, kind, pane, agent_args) {
@@ -519,17 +387,7 @@ impl SpawnArgs {
     /// Opens the new checkout's pane at the caller's own subdirectory, before the agent starts in
     /// it.
     ///
-    /// `agent start` launches the agent *through* the pane's shell, so the shell's directory at
-    /// launch is the agent's directory — which is what makes one [`surface::open_at`] enough, with
-    /// no pane split, moved, or closed.
-    ///
-    /// Never a refusal. Both ways of missing the subdirectory warn and return `Ok`, for the reason
-    /// [`Unplaced`] records.
-    ///
-    /// # Errors
-    ///
-    /// [`SpawnError::Herdr`] if herdr refused the `pane run` or the `pane get` outright — a
-    /// transport failure rather than a shell that has not caught up.
+    /// Never a refusal: both ways of missing the subdirectory warn and return `Ok`.
     fn open_subdirectory(&self, pane: &PaneId, checkout: &str, relative: &str, sink: &Sink) -> Result<(), SpawnError> {
         let Some(target) = target_in(checkout, relative) else {
             sink.warn(&Unplaced::Absent.warning(relative));
@@ -537,10 +395,8 @@ impl SpawnArgs {
         };
         let target = target.to_string_lossy().into_owned();
 
-        // The same budget and schedule `agent start` retries on, and for the same cause: a shell
-        // running a directory-environment hook is not at its prompt yet, and `pane run` types into
-        // it regardless — so text sent too early is lost outright rather than queued. Re-sent each
-        // round rather than polled, because a lost `cd` is never going to arrive on its own.
+        // `pane run` types into the shell whether or not it is at its prompt, so text sent too early
+        // is lost rather than queued — hence re-sent each round instead of polled.
         for delay in Backoff::within(self.settle_timeout) {
             if arrived(pane, &target)? {
                 return Ok(());
@@ -562,13 +418,7 @@ impl SpawnArgs {
 
 /// Why an agent could not be started in the subdirectory the caller asked for.
 ///
-/// Neither is a failure. By the time either is knowable the checkout exists, and this crate does not
-/// tear down what it created — the same reason a failure after a surface exists leaves the pane open
-/// and names it. A worktree deleted to report a directory that was gitignored anyway is a worse
-/// answer than one that works from the root and says so.
-///
-/// One type for both because they share a wording rule: name the directory that was missed and carry
-/// nothing else. The checkout path is the result line's to report.
+/// Neither is a failure: by the time either is knowable the checkout exists, so both warn instead.
 #[derive(Clone, Copy, Debug)]
 enum Unplaced {
     /// The directory is not in the fresh checkout: gitignored, untracked, or absent from `--base`.
@@ -603,10 +453,8 @@ pub struct Spawned {
     delivered: Option<bool>,
     /// The checkout a `--placement worktree` spawn landed on; absent for the other three.
     ///
-    /// Reported because the branch is usually herdr's to generate, which makes the response that
-    /// created it the one cheap moment it is knowable. Without this a caller runs `worktree list`
-    /// against the source repo and then guesses which checkout is the one it just made. Both fields
-    /// reach the human line too — see this type's [`Display`].
+    /// The branch is usually herdr's to generate, so this response is the one cheap moment it is
+    /// knowable.
     #[serde(skip_serializing_if = "Option::is_none")]
     worktree: Option<Checkout>,
     /// herdr's agent record, nested verbatim.
@@ -622,10 +470,6 @@ impl Display for Spawned {
             self.agent.kind().unwrap_or("unknown"),
             self.agent.pane()
         )?;
-        // Both halves of the checkout, because both are answers only this response holds: the branch
-        // is usually herdr's to generate, and the path is where a caller has to `cd` to work in it.
-        // The line is longer for it, and a re-query the caller cannot make cheaply is worse. The
-        // branch may be absent, so the path stands alone rather than leaving an empty bracket.
         if let Some(checkout) = &self.worktree {
             match &checkout.branch {
                 Some(branch) => write!(f, " [{branch} in {}]", checkout.path)?,
@@ -677,8 +521,7 @@ pub enum SpawnError {
     Config(ConfigError),
     /// There is no config to resolve an agent against.
     ///
-    /// Distinct from [`ConfigError::Missing`] only in what it recommends: this is the one command
-    /// that can start an agent without a config at all, so the refusal leads with that.
+    /// Distinct from [`ConfigError::Missing`] only in what it recommends: `--kind` needs no config.
     #[error("no config file to resolve an agent from; pass --kind <KIND> to start one directly, \
              or write a config at {}", path.display())]
     NoConfig {
@@ -715,9 +558,6 @@ pub enum SpawnError {
 
 impl SpawnError {
     /// Notes that `pane` was created before this failure, so the message says where to look.
-    ///
-    /// The pane is deliberately not closed: whatever went wrong is on screen in it, and closing it
-    /// would throw the error away with it.
     fn note_open_pane(self, pane: &PaneId) -> Self {
         Self::AfterSurface {
             pane: pane.clone(),
@@ -728,15 +568,7 @@ impl SpawnError {
 
 /// Hand-written rather than `#[from]`, for the one arm the derive cannot express.
 ///
-/// A missing config is the refusal this command alone can answer twice over — write the file, or
-/// pass `--kind` and need none — so it becomes [`SpawnError::NoConfig`] rather than being carried
-/// through as the generic config failure the other commands report. Every other config failure is
-/// carried exactly as it came, which is what `#[from]` did for all of them.
-///
-/// Written as the conversion rather than as a helper the fallible call site remembers to apply, so
-/// no `?` on a [`ConfigError`] can bypass it. The other two sites that produce one — resolving the
-/// named agent, and reading its brief — cannot produce [`ConfigError::Missing`] at all, so the
-/// mapping is a no-op for them.
+/// A conversion rather than a call-site helper, so no `?` on a [`ConfigError`] can bypass the mapping.
 impl From<ConfigError> for SpawnError {
     fn from(error: ConfigError) -> Self {
         match error {
@@ -788,13 +620,7 @@ impl AsExitStatus for SpawnError {
 
 /// The calling pane a split anchors on, read from the environment.
 ///
-/// Never herdr's `--current`: that flag resolves server-side to whichever pane is *focused*, which
-/// is not this one when the command runs from an unfocused pane.
-///
-/// # Errors
-///
-/// [`SpawnError::MissingAnchor`] when the variable is unset or blank, naming the two flags that work
-/// outside a herdr pane.
+/// Never herdr's `--current`, which resolves server-side to whichever pane is *focused*.
 fn anchor(variable: Option<&str>) -> Result<PaneId, SpawnError> {
     variable
         .map(str::trim)
@@ -805,12 +631,7 @@ fn anchor(variable: Option<&str>) -> Result<PaneId, SpawnError> {
 
 /// What this spawn delivers once the agent is up, if anything.
 ///
-/// The caller's `--msg` is what decides the shape, because it is the only half with an author: text
-/// somebody wrote is mail and gets an envelope naming them, where the agent's configured brief is
-/// instructions from a file and gets delivered exactly as written. A brief that rode inside the
-/// envelope would have it name whoever ran `spawn` as the author of something they did not write.
-///
-/// `None` only when there is neither, which is a spawn with nothing to deliver.
+/// Only `--msg` gets an envelope: a brief comes from a file and has no author to name as sender.
 fn first_delivery(brief: Option<NonEmptyText>, msg: Option<NonEmptyText>) -> Option<Delivery> {
     match (brief, msg) {
         (brief, Some(body)) => Some(Delivery::Mail { brief, body }),
@@ -821,12 +642,7 @@ fn first_delivery(brief: Option<NonEmptyText>, msg: Option<NonEmptyText>) -> Opt
 
 /// Where `cwd` sits inside `repo_root`, or `None` when there is nothing to place.
 ///
-/// `None` covers two cases that want the same answer: a caller already at the repository root, which
-/// has no subdirectory to reopen at, and a `cwd` that is not inside `repo_root` at all.
-///
-/// [`Path::strip_prefix`] rather than [`str::strip_prefix`], because it compares components. The
-/// string form answers `"y/src"` for `/repo` against `/repository/src`, and it would have to be
-/// taught about a trailing separator on either side, which the path form already knows.
+/// `None` for a caller already at the root and for a `cwd` outside `repo_root` entirely.
 fn relative_to(repo_root: &str, cwd: &str) -> Option<String> {
     let relative = Path::new(cwd).strip_prefix(repo_root).ok()?;
     if relative.as_os_str().is_empty() {
@@ -837,10 +653,6 @@ fn relative_to(repo_root: &str, cwd: &str) -> Option<String> {
 }
 
 /// The directory in a fresh checkout to open at, or `None` when the checkout does not have it.
-///
-/// One `is_dir` rather than a process, a herdr call, or a read of the shell's own error text: the
-/// checkout is local and so is this tool. Answered before anything is typed into the pane, which is
-/// what keeps the two failures apart — the retry loop that follows only ever waits for a shell.
 fn target_in(checkout: &str, relative: &str) -> Option<PathBuf> {
     let target = Path::new(checkout).join(relative);
     target.is_dir().then_some(target)
@@ -848,13 +660,7 @@ fn target_in(checkout: &str, relative: &str) -> Option<PathBuf> {
 
 /// Sends the directory change, then asks the pane where its shell actually ended up.
 ///
-/// Testing the outcome rather than assuming the command landed is the whole point: `pane run`
-/// succeeds whether the text reached a live prompt or a shell that had not started, and only
-/// [`surface::foreground_cwd`] can tell those apart.
-///
-/// # Errors
-///
-/// Whatever either herdr call returned.
+/// `pane run` succeeds whether or not the text reached a live prompt; only the cwd read can tell.
 fn arrived(pane: &PaneId, target: &str) -> Result<bool, HerdrError> {
     surface::open_at(pane, target)?;
     Ok(surface::foreground_cwd(pane)?.as_deref() == Some(target))
@@ -885,11 +691,7 @@ mod tests {
             .unwrap()
     }
 
-    /// The zero-config route, and the assertion that it really is one.
-    ///
-    /// No config is read at all, which is what makes this usable before anyone has written one and
-    /// what keeps a malformed file from breaking it. The temp directory is handed in as `cwd` so the
-    /// repository walk would have somewhere real to look if it ran — the point is that it does not.
+    /// The temp directory is a `cwd` the repository walk could look in if it ran; the point is it does not.
     #[test]
     fn a_kind_starts_an_agent_with_no_config_read_at_all() {
         let elsewhere = tempfile::tempdir().unwrap();
@@ -908,11 +710,6 @@ mod tests {
         assert!(configured.brief.is_none(), "no agent, so nothing that carries a brief");
     }
 
-    /// A kind this build has never heard of is herdr's to refuse, not this crate's.
-    ///
-    /// The same reason the config's `kind` is a plain `String`: herdr answers
-    /// `unsupported_agent_kind` from a list that is not published anywhere machine-readable, and a
-    /// copy of it here would refuse a kind herdr had just learned.
     #[test]
     fn a_kind_this_build_has_no_harness_for_is_passed_through_rather_than_refused() {
         let elsewhere = tempfile::tempdir().unwrap();
@@ -925,10 +722,6 @@ mod tests {
         assert_eq!(configured.kind, "some-agent-shipped-next-year");
     }
 
-    /// Both name what starts, so passing both is a caller that has not decided.
-    ///
-    /// A refusal rather than a precedence rule, for the reason `--branch` under the wrong placement
-    /// is refused: a flag that is silently ignored is a caller who never learns what did not happen.
     #[test]
     fn a_kind_is_refused_beside_the_two_flags_it_would_otherwise_ignore() {
         assert!(Harness::try_parse_from(["spawn", "w", "--kind", "codex", "--agent", "sol"]).is_err());
@@ -938,10 +731,6 @@ mod tests {
         assert_eq!(parse(&["spawn", "w", "--agent", "sol"]).agent.as_deref(), Some("sol"));
     }
 
-    /// The refusal a caller with no config meets names both routes out of it.
-    ///
-    /// Both halves matter: the path is what someone who meant to have a config needs, and `--kind`
-    /// is what someone who never wanted one needs. Which of those a caller is, this cannot know.
     #[test]
     fn no_config_is_answered_with_the_path_to_write_and_the_flag_that_needs_none() {
         let error = SpawnError::from(ConfigError::Missing {
@@ -953,7 +742,6 @@ mod tests {
         assert!(error.to_string().contains("/home/someone/.config"), "{error}");
     }
 
-    /// Only the missing-file case is restated; every other config failure is carried as it came.
     #[test]
     fn a_config_that_exists_and_is_broken_is_reported_as_the_config_failure_it_is() {
         let error = SpawnError::from(ConfigError::NoDefault {
@@ -964,8 +752,6 @@ mod tests {
         assert!(!error.to_string().contains("--kind"), "{error}");
     }
 
-    /// A typo is answered with the whole value set, which the flag group it replaced could not do:
-    /// that reported whichever pair happened to conflict and never named the third.
     #[test]
     fn an_unknown_placement_is_rejected_and_the_error_lists_the_ones_that_exist() {
         let error = Harness::try_parse_from(["spawn", "reviewer", "--placement", "tba"]).unwrap_err();
@@ -981,8 +767,7 @@ mod tests {
 
     #[test]
     fn placement_defaults_to_splitting_the_calling_pane() {
-        // Also the test that exercises the string default: a typo in `default_value` fails here
-        // rather than reaching a caller.
+        // Also exercises the `default_value` string: a typo in it fails here rather than reaching a caller.
         assert_eq!(parse(&["spawn", "reviewer"]).placement, Placement::Pane);
         assert_eq!(
             parse(&["spawn", "reviewer", "--placement", "tab"]).placement,
@@ -1000,17 +785,10 @@ mod tests {
 
     #[test]
     fn focus_is_opt_in() {
-        // A tool meant to be driven by agents should not steal the human's focus. An interactive
-        // shell alias can put --focus back.
         assert_eq!(parse(&["spawn", "reviewer"]).focus(), Focus::Leave);
         assert_eq!(parse(&["spawn", "reviewer", "--focus"]).focus(), Focus::Take);
     }
 
-    /// A first prompt that opens with a dash is delivered rather than rejected.
-    ///
-    /// The parse is the redaction: a value clap accepts is a value no clap diagnostic can repeat.
-    /// `--` is no repair here — it already belongs to `agent_args` — so this argument has to take
-    /// hyphen-leading text on its own.
     #[test]
     fn a_first_prompt_that_opens_with_a_dash_is_prompt_text_rather_than_a_flag() {
         for text in ["--force the issue", "-e", "--focus"] {
@@ -1022,7 +800,6 @@ mod tests {
 
     #[test]
     fn a_flag_after_the_first_prompt_is_still_a_flag() {
-        // `allow_hyphen_values` must claim this option's own value and nothing past it.
         let args = parse(&[
             "spawn",
             "reviewer",
@@ -1096,11 +873,7 @@ mod tests {
         );
     }
 
-    /// The reservation is this crate's rule, not herdr's, and the type that mirrors herdr stays clean.
-    ///
-    /// `AgentName` restates herdr's rule and its rejection names herdr as the authority. A reservation
-    /// herdr does not have would make it refuse a name herdr accepts and blame herdr for it — the exact
-    /// disagreement the "validate only what herdr won't" rule exists to prevent.
+    /// The reservation is this crate's rule, not herdr's, so `AgentName` must keep accepting the name.
     #[test]
     fn the_reservation_lives_in_spawn_rather_than_in_the_name_type() {
         assert!("operator".parse::<crate::core::AgentName>().is_ok());
@@ -1115,8 +888,7 @@ mod tests {
 
     #[test]
     fn the_usage_error_says_which_placements_work_instead() {
-        // All three that need no calling pane, worktree included: it creates its own workspace and
-        // resolves its source from `--cwd`, so it works outside a herdr session too.
+        // Worktree included: it creates its own workspace, so it too needs no calling pane.
         assert_eq!(
             anchor(None).unwrap_err().to_string(),
             "--placement pane needs a calling herdr pane and HERDR_PANE_ID is unset; \
@@ -1137,10 +909,6 @@ mod tests {
         );
     }
 
-    /// The old flag is declared only so its rename can be reported.
-    ///
-    /// clap's suggestion machinery will not reach `--agent` from `preset`, and a bare *unrecognized
-    /// argument* is a poor way to learn about a rename.
     #[test]
     fn the_old_flag_is_answered_with_the_one_that_replaced_it() {
         let args = parse(&["spawn", "reviewer", "--preset", "opus"]);
@@ -1160,11 +928,6 @@ mod tests {
         );
     }
 
-    /// The caller's message is what decides the shape, because it is the only half with an author.
-    ///
-    /// The brief rides alongside the envelope rather than inside it: it comes from a file the
-    /// recipient's own config points at, and an envelope around it would name whoever ran `spawn` as
-    /// the author of something they did not write.
     #[test]
     fn a_message_is_mail_and_the_brief_rides_outside_the_envelope() {
         let brief = "You review Rust.".parse::<NonEmptyText>().unwrap();
@@ -1181,11 +944,6 @@ mod tests {
         }
     }
 
-    /// A brief with nothing behind it is not mail, so it gets no envelope at all.
-    ///
-    /// Which is the point of the split: an agent started with only its own standing instructions has
-    /// nobody to reply to, and a `<how-to-reply>` addressed at the person who ran `spawn` would be
-    /// inviting an answer to a message that was never sent.
     #[test]
     fn a_brief_with_no_message_behind_it_is_delivered_unwrapped() {
         let brief = "You review Rust.".parse::<NonEmptyText>().unwrap();
@@ -1211,7 +969,6 @@ mod tests {
         assert!(first_delivery(None, None).is_none(), "nothing to deliver");
     }
 
-    /// Both flags describe an envelope, and a spawn with no message delivers none.
     #[test]
     fn a_reply_flag_is_refused_on_a_spawn_that_sends_no_envelope() {
         for flag in [vec!["--no-reply"], vec!["--reply-to", "collector"]] {
@@ -1241,8 +998,6 @@ mod tests {
 
     #[test]
     fn branch_and_base_are_refused_under_a_placement_that_makes_no_worktree() {
-        // Not ignored. A caller templating --branch into every spawn would otherwise never learn
-        // that the isolation it asked for did not happen.
         for placement in ["pane", "tab", "workspace"] {
             for flag in ["--branch", "--base"] {
                 let error = parse(&["spawn", "reviewer", "--placement", placement, flag, "x"])
@@ -1272,8 +1027,7 @@ mod tests {
         assert_eq!(both.branch.as_deref(), Some("worktree/flake-fix"));
         assert_eq!(both.base.as_deref(), Some("origin/main"));
 
-        // Neither is required: herdr generates a branch and bases on HEAD, and this crate states
-        // no default of its own.
+        // Neither is required: herdr generates a branch and bases on HEAD.
         let neither = parse(&["spawn", "reviewer", "--placement", "worktree"]);
         assert!(neither.check_worktree_flags().is_ok());
         assert_eq!(neither.branch, None);
@@ -1282,19 +1036,11 @@ mod tests {
 
     #[test]
     fn an_anchor_is_read_from_the_environment_rather_than_resolved_by_herdr() {
-        // Never herdr's `--current`: that resolves server-side to whichever pane is *focused*, which
-        // is not this one when the command runs from an unfocused pane.
         assert_eq!(anchor(Some("w4:p1")).unwrap(), PaneId::from("w4:p1"));
         assert!(anchor(Some("   ")).is_err(), "a blank variable is as good as unset");
     }
 
-    /// The settle window is spent on a schedule this file no longer owns.
-    ///
-    /// [`Backoff`]'s own tests cover the doubling, the cap, and landing exactly on the budget. What is
-    /// spawn's is the *policy*: which failure is worth retrying, and how long to keep at it — and the
-    /// one attempt after the schedule runs out, so a zero `--settle-timeout` still tries once. That
-    /// last part is not tested here, because proving it needs a herdr that refuses on demand and no
-    /// test in this crate invokes herdr.
+    /// The last-attempt-after-the-budget path is not covered here: proving it needs a live herdr.
     #[test]
     fn the_settle_window_is_the_default_unless_a_caller_narrows_it() {
         assert_eq!(parse(&["spawn", "reviewer"]).settle_timeout, DEFAULT_SETTLE_MS);
@@ -1316,8 +1062,6 @@ mod tests {
 
     #[test]
     fn a_caller_at_the_repository_root_has_nothing_to_place_and_skips_the_step() {
-        // Not an empty string that a later `cd` would run as a no-op: the pane already opens at the
-        // checkout root, so there is nothing for the placement step to do.
         assert_eq!(relative_to("/work/repo", "/work/repo"), None);
     }
 
@@ -1328,30 +1072,19 @@ mod tests {
         assert_eq!(relative_to("/work/repo/", "/work/repo/"), None);
     }
 
-    /// The reason this compares path components rather than string prefixes.
-    ///
-    /// `str::strip_prefix` would answer `"y/src"` here and send the agent somewhere that does not exist.
-    /// The second case is the caller already inside a linked worktree, whose `repo_root` is the main
-    /// checkout it is not under — herdr refuses to cut a worktree from there, and answering `None`
-    /// keeps this from computing nonsense in the moment before that refusal arrives.
+    /// The second case is a caller inside a linked worktree, whose `repo_root` is the main checkout.
     #[test]
     fn a_directory_that_only_looks_like_a_prefix_of_the_root_is_not_inside_it() {
         assert_eq!(relative_to("/work/repo", "/work/repository/src"), None);
         assert_eq!(relative_to("/work/repo", "/work/trees/repo-8e01/src"), None);
     }
 
-    /// `--cwd` is where the agent works, under every placement.
-    ///
-    /// The old help said it meant the source checkout "for a worktree" — one flag with two meanings,
-    /// distinguished by another flag's value, which was the defect under the subdirectory bug rather
-    /// than a wording slip. Asserted as an absence because the replacement wording is prose that should
-    /// be free to improve.
+    /// Asserted as an absence, so the replacement wording stays free to improve.
     #[test]
     fn the_cwd_help_no_longer_claims_a_second_meaning_for_one_placement() {
         let mut command = <Harness as clap::CommandFactory>::command();
         let rendered = command.render_help().to_string();
-        // Collapsed to single spaces first: clap wraps help text to the terminal width, so a phrase
-        // asserted against the raw rendering can be split across two lines and pass vacuously.
+        // Collapsed to single spaces: clap wraps help text, so a split phrase could pass vacuously.
         let flattened = rendered.split_whitespace().collect::<Vec<&str>>().join(" ");
 
         assert!(flattened.contains("--cwd"), "the flag is still there");
@@ -1361,11 +1094,7 @@ mod tests {
         );
     }
 
-    /// Three of the four placements answer without asking herdr anything.
-    ///
-    /// That is what makes this testable at all — no automated test in this crate invokes herdr, so a
-    /// version that called out for every placement would have nothing to assert here. The worktree arm
-    /// is the one this cannot cover, and it is covered by the live rehearsal instead.
+    /// The worktree arm needs a live herdr, so the rehearsal covers it instead.
     #[test]
     fn only_a_worktree_spawn_asks_where_the_caller_sits_in_its_repository() {
         for placement in ["pane", "tab", "workspace"] {
@@ -1377,8 +1106,6 @@ mod tests {
 
     #[test]
     fn a_subdirectory_the_fresh_checkout_does_not_have_falls_back_to_the_checkout_root() {
-        // Absent because it is gitignored, untracked, or not in the ref `--base` named. `None` *is* the
-        // checkout root: it skips the placement step, and the pane herdr made already opens there.
         let checkout = tempfile::tempdir().unwrap();
 
         assert_eq!(target_in(&checkout.path().to_string_lossy(), "src/api"), None);
@@ -1399,11 +1126,6 @@ mod tests {
         assert_eq!(target_in(&checkout.path().to_string_lossy(), "README.md"), None);
     }
 
-    /// Both warnings name the directory that was missed, and neither carries anything else.
-    ///
-    /// The checkout path is deliberately absent: the result line already reports it, and a warning that
-    /// repeats it is noise on the one line a caller reads. What a caller cannot get anywhere else is
-    /// which directory it asked for and did not get.
     #[test]
     fn both_warnings_name_the_directory_that_was_missed_and_carry_nothing_else() {
         assert_eq!(
@@ -1456,11 +1178,6 @@ mod tests {
         );
     }
 
-    /// A worktree spawn reports the checkout, because nothing else will.
-    ///
-    /// The branch is herdr's to generate unless the caller named one, so this response is the one
-    /// cheap moment either half is knowable — and the path is what a caller has to `cd` to. Both
-    /// forms carry both.
     #[test]
     fn a_worktree_spawn_reports_the_branch_it_landed_on_and_the_path_beside_it() {
         let spawned = Spawned {
@@ -1485,8 +1202,6 @@ mod tests {
 
     #[test]
     fn a_worktree_with_no_branch_reports_the_path_alone_rather_than_an_empty_bracket() {
-        // herdr's branch field is optional, so the human line has to survive a `None` it does not
-        // expect. The path is the half that is always there, and it is the half a caller acts on.
         let spawned = Spawned {
             placement: Placement::Worktree,
             delivered: None,
@@ -1505,7 +1220,6 @@ mod tests {
 
     #[test]
     fn a_failure_after_the_surface_exists_reports_the_pane_it_left_open() {
-        // Whatever went wrong is on screen in that pane, and closing it would throw the error away.
         let error = SpawnError::AfterSurface {
             pane: PaneId::from("w4:p17"),
             error: Box::new(SpawnError::Herdr(crate::herdr::HerdrError::Refused {

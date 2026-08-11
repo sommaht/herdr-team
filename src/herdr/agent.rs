@@ -9,10 +9,7 @@ use crate::herdr::{HerdrError, run, run_text};
 // Constants
 // =====================================================================================================================
 
-/// herdr's status for an agent that is mid-turn.
-///
-/// One spelling shared by the `--until` this crate passes and the check for the honest gap where an
-/// agent was already working before a prompt was sent.
+/// herdr's status for an agent that is mid-turn, spelled once for every reader.
 pub const WORKING: &str = "working";
 
 // =====================================================================================================================
@@ -23,8 +20,7 @@ pub const WORKING: &str = "working";
 ///
 /// # Errors
 ///
-/// Returns whatever [`run`] returned; `agent_not_found` and `agent_target_ambiguous` are herdr's
-/// answers about the target, resolved server-side.
+/// Returns whatever [`run`] returned.
 pub fn get(target: &str) -> Result<AgentRecord, HerdrError> {
     let info: AgentInfo = run(&get_args(target))?;
     Ok(info.agent)
@@ -32,8 +28,7 @@ pub fn get(target: &str) -> Result<AgentRecord, HerdrError> {
 
 /// Reads the plain-text detection snapshot the composer guard inspects.
 ///
-/// Goes through [`run_text`] rather than [`run`] because `agent read` prints the snapshot itself
-/// rather than a JSON envelope.
+/// Goes through [`run_text`]: `agent read` prints the snapshot itself, not a JSON envelope.
 ///
 /// # Errors
 ///
@@ -47,8 +42,7 @@ pub fn read(target: &str, source: &str, format: &str, lines: u32) -> Result<Stri
 /// # Errors
 ///
 /// Returns whatever [`run`] returned. `agent_pane_busy` is the retryable one: the pane exists but
-/// its shell has not reached its prompt yet, and the caller retries rather than abandoning the
-/// surface.
+/// its shell has not reached its prompt yet.
 pub fn start(name: &AgentName, kind: &str, pane: &PaneId, args: &[String]) -> Result<AgentRecord, HerdrError> {
     let started: AgentStarted = run(&start_args(name, kind, pane, args))?;
     Ok(started.agent)
@@ -67,17 +61,13 @@ pub fn prompt(target: &str, text: &NonEmptyText, wait: Option<&Wait>) -> Result<
 
 /// Waits for a target to hold one of several states, with no submission attached.
 ///
-/// **Not the wait [`prompt`] carries, and the difference decides where it may be used.** The wait
-/// on a submission is anchored: herdr carries the submission's own state-change sequence into it,
-/// so a named state matches only through a transition that happened afterwards. This one has no
-/// anchor at all — it reads the current status first and returns immediately if that already
-/// matches. So it proves a transition only for a caller who has already established one, and
-/// issued against a target nobody has prompted it answers whatever the target happens to be doing.
+/// Unlike the wait [`prompt`] carries, this one is unanchored: it reads the current status first
+/// and returns immediately on a match, so it proves a transition only for a caller who has
+/// already established one.
 ///
 /// # Errors
 ///
-/// Returns whatever [`run`] returned. `timeout` means none of the states arrived; there is no
-/// stall to report, because nothing was submitted that could have stalled.
+/// Returns whatever [`run`] returned. `timeout` means none of the states arrived.
 pub fn wait(target: &str, wait: &Wait) -> Result<AgentRecord, HerdrError> {
     let info: AgentInfo = run(&wait_args(target, wait))?;
     Ok(info.agent)
@@ -96,29 +86,21 @@ pub struct Wait {
 // Responses
 // =====================================================================================================================
 
-/// An agent as herdr reports it, with only the fields this crate branches on named.
-///
-/// Everything else rides through as a flattened map and is nested back into the result verbatim.
-/// Re-describing herdr's record in a shape of our own would buy a translation layer that has to be
-/// revised every time herdr adds a field.
+/// An agent as herdr reports it, with only the fields this crate branches on named; everything
+/// else rides through as a flattened map and is nested back into the result verbatim.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct AgentRecord {
     /// The kind herdr detected, absent for a pane that hosts no agent. Selects the composer marker.
     agent: Option<String>,
     /// The current status, which decides whether delivery is verifiable.
     ///
-    /// A `String`, not an enum. herdr owns this vocabulary and grows it; an enum would either fail
-    /// to parse a status herdr added or re-spell an unrecognized one on the way out, and both are
-    /// worse than carrying the word herdr chose. Exactly one comparison is made against it, to
-    /// [`WORKING`].
+    /// A `String`, not an enum: herdr owns and grows this vocabulary.
     agent_status: String,
     /// The pane the agent runs in.
     pane_id: PaneId,
     /// The name herdr recorded, absent for a pane herdr did not name.
     ///
-    /// Skipped when absent rather than written as `null`: herdr omits the field for an unnamed
-    /// pane, and sending a `null` back where herdr sent nothing would be restating rather than
-    /// propagating.
+    /// Skipped when absent: herdr omitted the field, so it stays omitted.
     #[serde(skip_serializing_if = "Option::is_none")]
     name: Option<String>,
     /// Every other field herdr reported, untouched.
@@ -143,16 +125,11 @@ impl AgentRecord {
     }
 
     /// The agent's name as herdr recorded it, or a placeholder for a pane herdr did not name.
-    ///
-    /// One spelling shared by every caller, so a nameless pane reads the same everywhere.
     pub fn name_or_unknown(&self) -> &str {
         self.name.as_deref().unwrap_or("(unnamed)")
     }
 
     /// The agent's name as herdr recorded it, absent for a pane herdr did not name.
-    ///
-    /// The raw option, for a caller whose fallback is not the human-readable placeholder —
-    /// the envelope falls back to the pane id, which is an address rather than a label.
     pub fn name(&self) -> Option<&str> {
         self.name.as_deref()
     }
@@ -186,11 +163,6 @@ fn get_args(target: &str) -> Vec<String> {
 }
 
 /// `herdr agent read <TARGET> --source <SOURCE> --format <FORMAT> --lines <N>`.
-///
-/// The source and the format are parameters rather than constants here: which rendering of a pane
-/// answers a question is the asker's business, and this seam only spells the call. The format
-/// stopped being fixed when the composer guard needed the escape sequences that tell a harness's own
-/// suggestion from an operator's draft.
 fn read_args(target: &str, source: &str, format: &str, lines: u32) -> Vec<String> {
     [
         "agent", "read", target, "--source", source, "--format", format, "--lines",
@@ -203,8 +175,7 @@ fn read_args(target: &str, source: &str, format: &str, lines: u32) -> Vec<String
 
 /// `herdr agent start <NAME> --kind <KIND> --pane <ID> [-- <ARGS…>]`.
 ///
-/// The separator is omitted when there are no agent arguments, so an agent declaring none produces
-/// the same vector a hand-typed launch would.
+/// The separator is omitted when there are no agent arguments.
 fn start_args(name: &str, kind: &str, pane: &str, args: &[String]) -> Vec<String> {
     let mut vector = ["agent", "start", name, "--kind", kind, "--pane", pane]
         .map(str::to_owned)
@@ -218,8 +189,8 @@ fn start_args(name: &str, kind: &str, pane: &str, args: &[String]) -> Vec<String
 
 /// `herdr agent prompt <TARGET> <TEXT> [--wait --until <STATE>… --timeout <MS>]`.
 ///
-/// The text is the second positional, which is where herdr reads it before it starts reading
-/// options — so a prompt beginning with `--` is delivered rather than misread.
+/// The text is the second positional, read before options — a prompt beginning with `--` is
+/// delivered rather than misread.
 fn prompt_args(target: &str, text: &str, wait: Option<&Wait>) -> Vec<String> {
     let mut vector = ["agent", "prompt", target, text].map(str::to_owned).to_vec();
     if let Some(wait) = wait {
@@ -260,8 +231,6 @@ mod tests {
 
     #[test]
     fn a_start_names_the_kind_and_the_pane_and_puts_agent_args_after_the_separator() {
-        // Extra args are appended after the config's with no merging and no de-duplication, so the
-        // agent's own last-flag-wins rules settle any conflict.
         assert_eq!(
             start_args(
                 "reviewer",
@@ -285,9 +254,7 @@ mod tests {
 
     #[test]
     fn a_prompt_waits_for_the_states_that_prove_delivery() {
-        // `--until working` is the load-bearing choice: treat a prompt as delivered when the status
-        // has actually moved, never on the exit code. herdr's bare `--wait` waits for the *turn* to
-        // finish, which is wrong for a dispatch that should return promptly.
+        // herdr's bare `--wait` waits for the whole turn; `--until working` returns once the status moves.
         let wait = Wait {
             until: vec![WORKING.to_owned()],
             timeout: 15_000,
@@ -340,7 +307,6 @@ mod tests {
         );
     }
 
-    /// The standalone wait spells the same states, with no `--wait` to opt into.
     #[test]
     fn a_standalone_wait_repeats_until_once_per_state_and_carries_no_wait_flag() {
         let wait = Wait {
@@ -377,7 +343,6 @@ mod tests {
         );
     }
 
-    /// `agent wait` answers the envelope `agent get` does, which is why it reuses that struct.
     #[test]
     fn a_standalone_wait_answers_the_same_envelope_a_get_does() {
         let info: AgentInfo =
@@ -389,8 +354,7 @@ mod tests {
 
     #[test]
     fn a_read_asks_for_the_detection_snapshot_as_plain_text() {
-        // `--source detection` is the plain-text bottom-buffer snapshot herdr's own agent detection
-        // reads. It is absent from that subcommand's usage line but accepted.
+        // `--source detection` is absent from herdr's usage line but accepted.
         assert_eq!(
             read_args("reviewer", "detection", "text", 40),
             [
@@ -422,7 +386,6 @@ mod tests {
         assert_eq!(record.pane(), &PaneId::from("w4:p17"));
         assert_eq!(record.name_or_unknown(), "reviewer");
 
-        // Everything else rides through: no field of herdr's is dropped, and none is renamed.
         let wire: serde_json::Value = serde_json::to_value(&record).unwrap();
         assert_eq!(wire["terminal_id"], "term_1");
         assert_eq!(wire["workspace_id"], "w4");
@@ -467,8 +430,6 @@ mod tests {
 
     #[test]
     fn a_status_herdr_adds_later_parses_and_round_trips() {
-        // The status stays a `String` deliberately: an enum would either fail to parse a status
-        // herdr grew, or re-spell it on the way out. herdr owns this vocabulary.
         let record: AgentRecord =
             serde_json::from_str(r#"{"agent":"claude","agent_status":"compacting","pane_id":"w4:p2"}"#).unwrap();
 

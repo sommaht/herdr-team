@@ -1,22 +1,7 @@
 //! `prime` — print an agent-facing brief on driving this CLI.
 //!
-//! Written to be run from a session-start hook, which sets every constraint here: it makes no herdr
-//! call, because nothing guarantees a running server at that point, and it cannot fail, because a
-//! hook that fails is worse than one that says little.
-//!
-//! The brief is hand-written rather than composed from clap's help. Five subcommands render past two
-//! hundred lines, and context an agent carries all session has a cost that a reference dump cannot
-//! justify when `--help` is one command away. What it gives instead is invocations grouped by intent,
-//! with the gotchas attached to the line they qualify — because what an agent cannot look up on demand
-//! is which failures are worth retrying and which commands refuse by default.
-//!
-//! Hand-written means drift is possible, so three tests hold it honest: the commands and flags it names
-//! must exist, the commands that exist must be named, and the exit codes it teaches must be the ones
-//! the contract reports. The agent table is generated outright, from the same listing `agents`
-//! prints, so it cannot disagree with what `spawn --agent` will do.
-//!
-//! `--hook <harness>` asks the named harness to wrap the brief for its host. This module never learns
-//! the envelope's shape.
+//! Run from a session-start hook, so it makes no herdr call and cannot fail. The brief is
+//! hand-written; tests pin the commands, flags, and exit codes it names against the real CLI.
 
 use std::fmt::Display;
 use std::path::PathBuf;
@@ -35,16 +20,8 @@ use crate::harness::{self, AgentHarness};
 // The Brief
 // =====================================================================================================================
 
-/// The brief itself.
-///
-/// Shaped as command examples grouped by intent rather than as explanation, because a caller reaching
-/// for this wants the invocation, not the rationale. What prose there is attaches to the line it
-/// qualifies: `msg` returning on delivery rather than completion is a clause on the `--wait-until`
-/// row, not a paragraph. The gotchas are the reason this exists — a flag list cannot say which
-/// failures are worth retrying, or that two commands refuse by default.
-///
-/// Subject to a line budget enforced by a test, since this is context an agent carries for a whole
-/// session and nothing else pushes back on it growing.
+/// The brief itself: invocations grouped by intent, with the gotchas attached to the lines they
+/// qualify. A test enforces a line budget.
 const GUIDANCE: &str = "\
 # herdr-team
 
@@ -200,9 +177,6 @@ pub struct PrimeArgs {
 }
 
 /// A `--hook` value naming a harness this build cannot wrap for.
-///
-/// A typed error rather than the `String` clap would also accept: the choices are data, and spelling
-/// them into a string at the point of failure would put the formatting somewhere no test can reach.
 #[derive(Debug, Error)]
 #[error("unknown harness; this build wraps for {}", known.join(", "))]
 struct UnknownHarness {
@@ -211,10 +185,6 @@ struct UnknownHarness {
 }
 
 /// Accepts a harness name this build can wrap for, and names the choices when it cannot.
-///
-/// A `value_parser` rather than a check inside `execute`, which keeps a bad name an exit-2 argument
-/// error and leaves this command otherwise infallible. A `ValueEnum` would need a second list of
-/// harnesses beside [`harness::HARNESSES`] to derive on.
 fn known_harness(value: &str) -> Result<String, UnknownHarness> {
     if harness::by_kind(value).is_some() {
         Ok(value.to_owned())
@@ -231,15 +201,11 @@ impl Cmd for PrimeArgs {
     const TEXT_IN_BOTH_MODES: bool = true;
 
     fn execute(self, sink: &Sink) -> Result<Self::Ok, Self::Err> {
-        // The one place a `ConfigError` is deliberately dropped rather than reported. A hook fires
-        // before anyone has necessarily written a config, and failing there would cost the whole
-        // brief to say something the brief itself already says. The warnings a partly-broken config
-        // produces still reach the sink, which is the one thing worth saying here.
+        // A `ConfigError` is deliberately dropped: a hook fires before anyone has written a config.
         let agents = Config::load(self.config.as_deref(), None, sink)
             .ok()
             .map(|config| AgentList::of(&config));
-        // Resolved here rather than carried as a name, so `Display` has nothing left to look up.
-        // `expect` is safe because `known_harness` rejected anything `by_kind` cannot resolve.
+        // `expect` is safe: `known_harness` already rejected anything `by_kind` cannot resolve.
         let host = self
             .hook
             .as_deref()
@@ -262,16 +228,12 @@ pub struct Brief {
     agents: Option<AgentList>,
     /// The host to wrap for, absent when the brief is printed bare.
     ///
-    /// Skipped on the wire: a trait object has nothing to serialize, and `--hook` is a framing choice
-    /// rather than part of the brief.
+    /// Skipped on the wire: a trait object has nothing to serialize.
     #[serde(skip)]
     host: Option<&'static dyn AgentHarness>,
 }
 
-/// Told to the reader rather than to the host, because the host is what truncated it.
-///
-/// Costs one line against an agent silently acting on half a brief. Cheap here in a way it is not for
-/// tools that persist hook output elsewhere: re-running this command is the whole recovery.
+/// A recovery note carried inside the hook envelope, in case the host truncates it.
 const TRUNCATION_NOTE: &str =
     "[herdr-team prime] If your host truncated this, run `herdr-team prime` to read it in full.";
 
@@ -280,24 +242,18 @@ impl Display for Brief {
         let Some(host) = self.host else {
             return f.write_str(&self.text());
         };
-        // The note goes inside the envelope, since a truncating host is what makes it worth saying.
         let context = format!("{TRUNCATION_NOTE}\n\n{}", self.text());
-        // RS-002: the source is discarded because `fmt::Error` is a unit type with nowhere to carry
-        // one, and `Display` cannot return anything else. Nothing is lost that a caller could act on —
-        // per `AgentHarness::hook`, the only way this fails is a serde bug over two string fields.
+        // RS-002: the source is discarded because `fmt::Error` is a unit type with nowhere to carry it.
         f.write_str(&host.hook(&context).map_err(|_| std::fmt::Error)?)
     }
 }
 
 impl Brief {
     /// The brief as text: the guidance, then the agent table.
-    ///
-    /// Shared by both forms, because the hook envelope carries exactly what a reader would have seen.
     fn text(&self) -> String {
         match &self.agents {
             Some(agents) => format!("{}\n\n## Agents\n\n{agents}", self.guidance),
-            // Said rather than omitted: an agent that knows agents exist and sees none knows not to
-            // reach for `--agent`.
+            // Said rather than omitted, so an agent knows not to reach for `--agent`.
             None => format!("{}\n\n## Agents\n\nNone configured.", self.guidance),
         }
     }
@@ -314,27 +270,8 @@ mod tests {
     use super::*;
     use crate::cmd::ExitStatus;
 
-    /// The longest the brief may run.
-    ///
-    /// Lives here because it exists only as an assertion — a budget rather than a suggestion, and
-    /// raising it is then a deliberate edit to a test rather than a number that quietly drifts.
-    ///
-    /// Raised from forty when the brief became command blocks instead of paragraphs. Runnable lines
-    /// earn their length in a way explanation does not, and five commands' worth of invocations plus
-    /// worked examples does not fit in forty. It is still a ceiling: this is context an agent carries
-    /// for a whole session.
-    ///
-    /// A hundred rather than the eighty that first replaced forty, which the brief immediately came
-    /// within three lines of — a ceiling that tight makes the next ordinary edit a budget negotiation.
-    /// The reference this borrows from runs about a hundred and fifty lines for forty-odd commands, so
-    /// a hundred for five is already generous, and reaching it should prompt a rewrite rather than
-    /// another raise.
-    ///
-    /// The raise to a hundred and twenty is that rewrite's one exemption, spent deliberately on the
-    /// Mail section. Every other section documents a command an agent can read with `--help`; mail is
-    /// the one thing that arrives unannounced in a recipient's composer, and the eight-line worked
-    /// envelope is what makes the elements legible before the first message rather than after it. The
-    /// ceiling still binds: another section costing ten lines is a rewrite, not a third raise.
+    /// The ceiling on the brief's length: raising it is a deliberate edit here, and reaching it
+    /// should prompt a rewrite rather than a raise.
     const LINE_BUDGET: usize = 120;
 
     #[derive(Debug, Parser)]
@@ -344,9 +281,6 @@ mod tests {
     }
 
     /// The brief as a reader receives it, over a config path that does not exist.
-    ///
-    /// Not a fixture: rendering it is the only way to check what the generated halves actually
-    /// contribute, and a missing config is the case a hook is most likely to hit.
     fn rendered() -> String {
         Harness::try_parse_from(["prime", "--config", "/nonexistent/config.toml"])
             .expect("parses")
@@ -358,10 +292,8 @@ mod tests {
 
     /// Tokens in the brief that look like long flags.
     ///
-    /// The brief writes flags bare in its command blocks and backticked in prose, so a token can
-    /// arrive as "`--placement". Everything that is neither alphanumeric nor a dash comes off both
-    /// ends, which leaves a leading `--` intact. The length guard drops the bare `--` separator on
-    /// spawn's extra-args row, which is a separator rather than a flag.
+    /// Trimming punctuation leaves a leading `--` intact; the length guard drops the bare `--`
+    /// separator, which is not a flag.
     fn flags_named() -> Vec<&'static str> {
         GUIDANCE
             .split_whitespace()
@@ -372,19 +304,12 @@ mod tests {
 
     #[test]
     fn a_config_that_cannot_be_read_costs_the_table_and_nothing_else() {
-        // The hook constraint: firing before anyone wrote a config must still produce the brief.
         let brief = rendered();
 
         assert!(brief.contains("## Agents\n\nNone configured."), "got {brief}");
         assert!(brief.contains("## Launching agents"), "the brief survived");
     }
 
-    /// The brief names every command, and every command it names exists.
-    ///
-    /// Both directions matter and they catch different things. A command renamed out from under the
-    /// brief fails the first; a command *added* without being documented fails the second, which is
-    /// the one that would otherwise go unnoticed — an agent cannot reach for what the brief never
-    /// mentions. clap's built-in `help` is excluded: it answers a human browsing.
     #[test]
     fn the_brief_documents_exactly_the_commands_that_exist() {
         let root = crate::Cli::command();
@@ -402,9 +327,8 @@ mod tests {
             );
         }
 
-        // The reverse: every full invocation in the brief names a command that exists. Splitting on
-        // the binary plus a space deliberately misses the title line, which has no space after it.
-        // Leading tokens that start with a dash are skipped, since `--json` can precede the command.
+        // Splitting on the binary plus a space misses the title line; leading `-` tokens are
+        // skipped because `--json` can precede the command.
         for tail in GUIDANCE.split("herdr-team ").skip(1) {
             let Some(candidate) = tail
                 .split_whitespace()
@@ -420,16 +344,11 @@ mod tests {
         }
     }
 
-    /// Every flag the brief names still exists somewhere in the CLI.
-    ///
-    /// Catches the drift that actually happens — a flag renamed or removed while the brief keeps
-    /// recommending it. It cannot catch a flag attributed to the wrong command; with five commands
-    /// that is what reading the brief is for.
     #[test]
     fn every_flag_the_brief_recommends_still_exists() {
         let root = crate::Cli::command();
-        // Global flags such as `--json` live on the root, not on the subcommands clap propagates them
-        // to — reading only the subcommands is what made a first version of this reject `--json`.
+        // Global flags such as `--json` live on the root, not on the subcommands clap propagates
+        // them to.
         let mut known: Vec<String> = root
             .get_arguments()
             .filter_map(|argument| argument.get_long().map(|long| format!("--{long}")))
@@ -442,7 +361,6 @@ mod tests {
 
         let mentioned = flags_named();
 
-        // Without this the test passes vacuously the moment the extraction stops working.
         assert!(
             !mentioned.is_empty(),
             "the brief names no flags at all, which is suspicious"
@@ -455,22 +373,6 @@ mod tests {
         }
     }
 
-    /// Every exit code the prose teaches is one the contract actually reports.
-    ///
-    /// Checked in this direction on purpose. Asserting the reverse — that each status *appears* — is
-    /// what a first attempt did, and it passes vacuously: the prose names the retryable code twice, so
-    /// changing either mention leaves the other to satisfy a `contains`. Asking instead that every
-    /// number the prose names be real catches a renumbering on the first mention, and survives a
-    /// reword that a phrase-matching test would break on.
-    ///
-    /// Scanning the whole brief for digits was the obvious version and it does not survive real
-    /// content: a `--timeout` row naming a default in milliseconds, or any number in an example, would
-    /// read as a bogus exit code. Only rows whose *first* token is a bare integer are the table, which
-    /// is exactly how that block is written.
-    ///
-    /// What it does not catch: prose that thins out. Deleting the table still leaves the retryable code
-    /// named in the refusals section, and it passes — asserting otherwise would mean pinning wording,
-    /// which is the thing that makes a test get weakened later.
     #[test]
     fn every_exit_code_the_brief_teaches_is_one_the_contract_reports() {
         let contracted: Vec<String> = [
@@ -484,6 +386,7 @@ mod tests {
         .map(|status| u8::from(status).to_string())
         .collect();
 
+        // Only rows whose first token is a bare integer are the exit-code table.
         let tabled: Vec<&str> = GUIDANCE
             .lines()
             .filter_map(|line| line.split_whitespace().next())
@@ -498,8 +401,7 @@ mod tests {
             );
         }
 
-        // The one status whose absence would actually hurt: an agent that never learns which code is
-        // retryable gives up where it should retry.
+        // An agent that never learns which code is retryable gives up where it should retry.
         let retryable = u8::from(ExitStatus::Conflict).to_string();
         assert!(
             tabled.contains(&retryable.as_str()),
@@ -507,17 +409,8 @@ mod tests {
         );
     }
 
-    /// Every settle wait the brief teaches names both terminal states.
-    ///
-    /// Found by running the brief's own dispatch-and-wait line against a fresh Claude Code agent:
-    /// the message was delivered and answered, and the command still exited 1 with "timed out
-    /// waiting for agent status". That harness finishes at `done` and never passes through `idle`,
-    /// so a wait naming only `idle` spends its whole timeout and then reports a failure that did not
-    /// happen — the wrong answer nobody is told about, which is the failure this tool exists to
-    /// avoid.
-    ///
-    /// Asserted per line rather than over the whole brief, so a second example added later cannot
-    /// pass by borrowing the first one's `done`.
+    /// A harness that settles to `done` never passes through `idle`, so a wait naming one state
+    /// alone spends its whole timeout on finished work.
     #[test]
     fn a_wait_the_brief_teaches_never_names_one_terminal_state_alone() {
         let waits: Vec<&str> = GUIDANCE.lines().filter(|line| line.contains("--wait-until")).collect();
@@ -533,9 +426,6 @@ mod tests {
 
     #[test]
     fn the_brief_explains_the_envelope_a_recipient_will_actually_see() {
-        // An agent reads this before it reads any mail. If the brief does not name the elements, the
-        // tag in the message is the only teacher — which works, and is not a reason to leave the
-        // brief silent.
         assert!(GUIDANCE.contains("<mail from="));
         assert!(GUIDANCE.contains("<how-to-reply>"));
         assert!(GUIDANCE.contains("--no-reply"));
@@ -549,7 +439,6 @@ mod tests {
 
     #[test]
     fn the_brief_stays_inside_its_line_budget() {
-        // Context an agent carries all session, with nothing else pushing back on it growing.
         let lines = GUIDANCE.lines().count();
 
         assert!(
@@ -558,10 +447,6 @@ mod tests {
         );
     }
 
-    /// The brief shows invocations, not explanations.
-    ///
-    /// The shape is the point, so it is worth one assertion: every command gets a block of runnable
-    /// lines, and there is a worked pipeline at the end. A rewrite back into paragraphs fails here.
     #[test]
     fn the_brief_is_built_from_runnable_lines_rather_than_paragraphs() {
         let indented = GUIDANCE
@@ -585,10 +470,6 @@ mod tests {
         assert_eq!(serde_json::to_string(&brief).unwrap(), r#"{"guidance":"the brief"}"#);
     }
 
-    /// The hook form is one line of valid JSON carrying the whole brief.
-    ///
-    /// Parsed rather than string-matched: the brief holds quotes, backticks and newlines, and the point
-    /// of building the envelope with serde is that a host can actually parse what comes out.
     #[test]
     fn the_hook_form_is_parseable_json_carrying_the_brief_verbatim() {
         let rendered = Harness::try_parse_from(["prime", "--hook", "claude"])
@@ -609,10 +490,7 @@ mod tests {
         assert!(context.contains(TRUNCATION_NOTE), "and so is the truncation note");
     }
 
-    /// Every harness wraps for its own host, even where the shape is currently shared.
-    ///
-    /// The seam is the assertion: `prime` asks the harness and does not know the shape. When a host's
-    /// contract is read and found to differ, this test is where the difference shows up.
+    /// The envelope shapes are currently shared; when a host's contract differs, it shows up here.
     #[test]
     fn each_harness_answers_for_its_own_host() {
         for kind in harness::kinds() {

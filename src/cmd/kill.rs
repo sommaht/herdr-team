@@ -20,10 +20,8 @@ const BUSY: [&str; 2] = [WORKING, "blocked"];
 
 /// herdr statuses that mean there is nothing in flight for this to destroy.
 ///
-/// A closed set on purpose, and the asymmetry with [`BUSY`] is deliberate: anything herdr reports
-/// that neither list names — its own `unknown`, or a status it grows later — reads as unrecognized
-/// and warns, rather than being assumed safe. Guessing "settled" wrong ends a turn's work; guessing
-/// "busy" wrong prints a line.
+/// A closed set: a status neither list names — herdr's own `unknown`, or one it grows later — warns
+/// rather than reading as safe to destroy.
 const SETTLED: [&str; 2] = ["idle", "done"];
 
 // =====================================================================================================================
@@ -56,10 +54,7 @@ impl KillArgs {
 
     /// herdr's record for the target, or `None` when herdr says no agent is there.
     ///
-    /// # Errors
-    ///
-    /// [`KillError::Herdr`] for anything but `agent_not_found`, which is not a failure here — it is
-    /// the signal to close the target as a bare pane instead.
+    /// `agent_not_found` is not a failure here: it is the signal to close the target as a bare pane.
     fn resolve(&self) -> Result<Option<AgentRecord>, KillError> {
         match agent::get(&self.target) {
             Ok(agent) => Ok(Some(agent)),
@@ -74,15 +69,9 @@ impl Cmd for KillArgs {
     type Err = KillError;
 
     /// One `agent get`, then the guard, then `pane close`.
-    ///
-    /// The resolution and the guard read the same response, so guarding costs no extra call. The
-    /// guard runs before anything is closed, so a refusal has changed nothing.
     fn execute(self, sink: &Sink) -> Result<Self::Ok, Self::Err> {
         let Some(agent) = self.resolve()? else {
-            // Nothing here herdr calls an agent, so the target goes to `pane close` as it arrived and
-            // herdr judges whether it names a pane. An agent that exited leaving its pane open is the
-            // main thing anyone wants to clean up, and testing the string's shape here would be this
-            // crate guessing at an id format that is herdr's to define.
+            // No agent here, so the target goes to `pane close` as it arrived and herdr judges it.
             surface::close(&self.target)?;
             return Ok(Killed {
                 // herdr accepted it, so by now it does name a pane.
@@ -99,8 +88,7 @@ impl Cmd for KillArgs {
                         status: agent.status().to_owned(),
                     });
                 }
-                // Failing open, for the composer guard's reason: refusing on absent evidence is a
-                // refusal the guard never earned. Closed anyway, and said so.
+                // Failing open: absent evidence never earns a refusal. Closed anyway, and said so.
                 answer => {
                     if let Some(warning) = answer.warning(&self.target, agent.status()) {
                         sink.warn(&warning);
@@ -144,8 +132,7 @@ impl Liveness {
 
     /// The diagnostic for a pane closed without evidence that was safe.
     ///
-    /// `None` for [`Self::Settled`], which had evidence, and for [`Self::Busy`], which is a refusal
-    /// rather than something to warn about and proceed from.
+    /// `None` for [`Self::Settled`], which had evidence, and [`Self::Busy`], which is a refusal instead.
     fn warning(self, target: &str, status: &str) -> Option<String> {
         match self {
             Self::Unrecognized => Some(format!(
@@ -165,11 +152,7 @@ impl Liveness {
 pub struct Killed {
     /// The pane that was closed.
     ///
-    /// Renamed on the wire to the key every other pane id in this crate uses — herdr's own
-    /// `pane_id`, which `spawn` and `prompt` carry inside their nested agent record. This is the
-    /// only result with a pane at the top level, because it is the only one whose agent record may
-    /// be absent, and a second spelling for the same value would make a generic extractor special-
-    /// case one command.
+    /// Renamed on the wire to herdr's own `pane_id`, the key every other pane id in this crate uses.
     #[serde(rename = "pane_id")]
     pane: PaneId,
     /// herdr's record of the agent that was in it, absent when the target hosted none.
@@ -218,7 +201,6 @@ impl AsExitStatus for KillError {
     fn exit_status(&self) -> ExitStatus {
         match self {
             Self::Herdr(error) => error.exit_status(),
-            // State the target already holds, which clears on its own when the turn ends.
             Self::Busy { .. } => ExitStatus::Conflict,
         }
     }
@@ -270,11 +252,6 @@ mod tests {
         assert_eq!(Liveness::of("done"), Liveness::Settled);
     }
 
-    /// A status herdr adds later must not read as safe to destroy.
-    ///
-    /// The two lists are asymmetric on purpose: guessing "settled" wrong ends a turn's work, while
-    /// guessing "unrecognized" wrong prints one line. So only the named statuses are treated as safe,
-    /// and everything else — herdr's own `unknown` included — warns.
     #[test]
     fn a_status_this_does_not_know_warns_rather_than_being_assumed_settled() {
         assert_eq!(Liveness::of("unknown"), Liveness::Unrecognized);
@@ -284,8 +261,6 @@ mod tests {
 
     #[test]
     fn only_an_unrecognized_status_warns() {
-        // Settled had evidence, so it says nothing. Busy is a refusal, which is carried by the error
-        // rather than by a diagnostic alongside a success.
         assert!(Liveness::Settled.warning("reviewer", "idle").is_none());
         assert!(Liveness::Busy.warning("reviewer", "working").is_none());
 

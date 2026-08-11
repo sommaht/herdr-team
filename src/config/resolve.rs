@@ -1,11 +1,6 @@
 //! Applying `base` chains to declared agents, and reporting what that made unusable.
 //!
-//! Pure. It is handed a merged declaration map and answers with the agents that resolved plus one
-//! warning per agent that did not — the warnings stay data until `load` drains them into the sink,
-//! which is what keeps every case here testable without one.
-//!
-//! Every failure is per-agent rather than per-map. A config with one broken entry keeps working for
-//! every other entry, and the listing — the command a caller debugs with — still answers.
+//! Failures are per-agent: a broken entry is dropped with a warning, and every other agent resolves.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -43,9 +38,7 @@ pub fn resolve(declared: &BTreeMap<String, Declared>) -> Resolved {
 fn one(name: &str, declared: &BTreeMap<String, Declared>) -> Result<Agent, Unusable> {
     let chain = chain(name, declared)?;
 
-    // Root first, so a child's value overwrites its base's and a child's args follow them. Appending
-    // rather than replacing is what makes a child adding one flag a one-line agent: agent CLIs are
-    // last-flag-wins, so nothing a child wants to change is lost by keeping the base's vector.
+    // Root first: a child's value overwrites its base's, and `args` appends rather than replaces.
     let mut kind = None;
     let mut model = None;
     let mut effort = None;
@@ -60,10 +53,7 @@ fn one(name: &str, declared: &BTreeMap<String, Declared>) -> Result<Agent, Unusa
     }
 
     let kind = kind.ok_or(Unusable::NoKind)?;
-    // `model` and `effort` exist only as whatever flags a harness spells them, and this build has
-    // harnesses for two of herdr's kinds. An agent asking for them under any other is dropped rather
-    // than started without them — a wrong answer nobody is told about is the failure this tool is
-    // shaped to avoid.
+    // An agent setting `model` or `effort` under a kind with no harness is dropped, not started without them.
     if (model.is_some() || effort.is_some()) && harness::by_kind(&kind).is_none() {
         return Err(Unusable::Untunable {
             kind,
@@ -77,7 +67,7 @@ fn one(name: &str, declared: &BTreeMap<String, Declared>) -> Result<Agent, Unusa
         effort,
         args,
         prompt_file,
-        // The agent's own declaration, not its base's: it is the file a reader goes to to change it.
+        // The agent's own declaration, not its base's.
         source: chain
             .last()
             .expect("a chain holds at least the agent itself")
@@ -87,12 +77,6 @@ fn one(name: &str, declared: &BTreeMap<String, Declared>) -> Result<Agent, Unusa
 }
 
 /// The base chain, root first, ending with the agent itself.
-///
-/// # Errors
-///
-/// [`Unusable::DanglingBase`] when a `base` names an agent no layer declares, and [`Unusable::Cycle`]
-/// when the walk returns to an agent it has already visited. The first lookup cannot dangle — the
-/// caller iterates the map's own keys — so a failed lookup is always a `base`.
 fn chain<'a>(name: &str, declared: &'a BTreeMap<String, Declared>) -> Result<Vec<&'a Declared>, Unusable> {
     let mut links = Vec::new();
     let mut seen = BTreeSet::new();
@@ -142,10 +126,7 @@ enum Unusable {
 impl Unusable {
     /// What the caller is told.
     ///
-    /// Names the agent, the reason, and that the agent is gone — never a value out of the file.
-    /// `model` and `effort` *become* the agent's command line, so the rule against logging an agent's
-    /// arguments covers the fields that build one: the warning says which field was set, not what it
-    /// was set to.
+    /// Never a value out of the file: the warning says which field was set, not what it was set to.
     fn warning(&self, name: &str) -> String {
         match self {
             Self::DanglingBase { base } => {
@@ -264,7 +245,6 @@ mod tests {
         assert_eq!(opus.effort.as_deref(), Some("xhigh"));
     }
 
-    /// The one field that appends rather than replacing, root first.
     #[test]
     fn args_are_concatenated_up_the_whole_chain_with_the_root_first() {
         let declared = map(vec![
@@ -410,7 +390,6 @@ mod tests {
         );
     }
 
-    /// The tuning fields need a harness, and this build has two.
     #[test]
     fn model_or_effort_under_a_kind_this_build_cannot_drive_drops_that_agent() {
         let declared = map(vec![(
@@ -434,7 +413,6 @@ mod tests {
         );
     }
 
-    /// An unknown kind is only refused when it asks for something this build must spell.
     #[test]
     fn an_unknown_kind_that_asks_for_neither_is_passed_through_untouched() {
         let declared = map(vec![(

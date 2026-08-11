@@ -60,11 +60,7 @@ pub struct AgentList {
 }
 
 impl AgentList {
-    /// The listing for a loaded config.
-    ///
-    /// Shared with `prime`, which renders the same table inside its brief: one place builds it, so
-    /// what `prime` tells an agent about the config cannot disagree with what `agents` prints or with
-    /// what `spawn --agent` will actually do.
+    /// The listing for a loaded config, shared with the table `prime` renders inside its brief.
     pub(super) fn of(config: &Config) -> Self {
         Self {
             default: config.default_name().to_owned(),
@@ -100,25 +96,18 @@ struct AgentLine {
     effort: Option<String>,
     /// The exact vector `agent start` receives, tuning flags included.
     ///
-    /// Safe to render here: the ban is on error messages and logs, and a listing of the config is the
-    /// one place these are the answer.
+    /// Safe to render: the logging ban covers error messages and logs, not a listing of the config.
     args: Vec<String>,
     /// The file prepended to this agent's first prompt, absolute.
     #[serde(skip_serializing_if = "Option::is_none")]
     prompt_file: Option<String>,
-    /// The config file that declared this agent, which is the question two layers create.
+    /// The config file that declared this agent.
     source: String,
     /// Whether this is the config's `default`.
     default: bool,
 }
 
-/// One line per agent, which makes this the one result that spans several lines.
-///
-/// The sink's usual contract is one line per value; a listing has nothing else it could honestly be,
-/// and the `--json` form is one object either way.
-///
-/// The brief is rendered by file name rather than by path: the whole path is long, it is already in
-/// the `--json` form exactly, and what a reader is checking here is *which* brief.
+/// One line per agent — the one result that spans several lines.
 impl Display for AgentList {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for (index, agent) in self.agents.iter().enumerate() {
@@ -196,7 +185,6 @@ mod tests {
 
     #[test]
     fn the_human_listing_is_one_line_per_agent_and_marks_the_default() {
-        // The one command whose result is a list, so the one place a result spans several lines.
         assert_eq!(
             listing().to_string(),
             "cheap (codex) --no-alt-screen --model gpt-5-low\n\
@@ -204,7 +192,6 @@ mod tests {
         );
     }
 
-    /// The human line carries the brief's name; the whole path is the wire form's job.
     #[test]
     fn a_brief_is_named_rather_than_pathed_on_the_line_a_person_reads() {
         assert_eq!(named("/repo/.herdr-team/review.md"), Some("review.md"));

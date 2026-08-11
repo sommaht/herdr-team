@@ -1,8 +1,4 @@
 //! Where the two config layers are looked for.
-//!
-//! The user layer's search is pure, with the environment passed in, so its order is testable without
-//! setting process variables that leak between tests. The repository layer's is not — deciding
-//! whether a file exists is the question — so it takes a directory and answers from disk.
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -12,21 +8,11 @@ use std::path::{Path, PathBuf};
 // =====================================================================================================================
 
 /// Where the user's file sits under a config directory.
-///
-/// This tool's own directory, not a second file inside herdr's: a public tool should not squat a
-/// filename in another project's config directory, where it would break the day that project claims
-/// the name.
 const RELATIVE_PATH: &str = "herdr-team/config.toml";
 
 /// Where a repository carries its own, relative to any directory in it, in the order they are tried.
 ///
-/// The directory form leads because it is the one that can carry more: an agent's `prompt_file` has
-/// somewhere to live beside the config that names it. The flat file is for a repository willing to
-/// spend a config on one file and not a directory — its `prompt_file` then resolves against the
-/// directory the file sits in, which is the same rule read from the same place.
-///
-/// Order settles a tie inside one directory and nothing else. Which form is *nearer* is what decides
-/// across directories, and [`repository`] tries both at each ancestor to keep it that way.
+/// The order settles only a tie inside one directory; which form is *nearer* decides across them.
 const REPOSITORY_PATHS: [&str; 2] = [".herdr-team/config.toml", ".herdr-team.config.toml"];
 
 // =====================================================================================================================
@@ -34,10 +20,6 @@ const REPOSITORY_PATHS: [&str; 2] = [".herdr-team/config.toml", ".herdr-team.con
 // =====================================================================================================================
 
 /// The user layer's path, and whether the caller named it.
-///
-/// The distinction is the whole point: a caller who passed `--config` is asking about *that* path, so
-/// its absence is a failure. The config directory's default location is only a place to look, and a
-/// repository layer may be the entire config.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum UserPath {
     /// `--config` or the environment override.
@@ -62,8 +44,6 @@ impl UserPath {
 
 /// Where the user's config file is looked for, in order: `--config`, the environment override,
 /// `$XDG_CONFIG_HOME`, then `~/.config`.
-///
-/// `None` when there is nowhere to look at all.
 pub fn user(
     explicit: Option<&Path>,
     environment: Option<&OsStr>,
@@ -88,17 +68,8 @@ pub fn user(
 
 /// The nearest repository config at or above `cwd`, walking to the filesystem root.
 ///
-/// The walk is what makes the layer usable: a spawn is run from wherever the work is, which is rarely
-/// the project root, and a config found only in the process directory would be silently absent from
-/// every subdirectory.
-///
-/// It does not stop at a repository boundary. Locating one is a herdr call this crate makes only for
-/// worktree spawns, and paying for it on every load — to refuse a file the caller placed on purpose —
-/// buys nothing.
-///
-/// Both spellings in [`REPOSITORY_PATHS`] are tried at each ancestor before the walk moves up, so a
-/// nearer config wins whichever form it takes. Trying one form all the way to the root before the
-/// other would let a distant directory config beat the flat file sitting in the caller's own project.
+/// The walk does not stop at a repository boundary. Both spellings in [`REPOSITORY_PATHS`] are tried
+/// at each ancestor before the walk moves up, so a nearer config wins whichever form it takes.
 pub fn repository(cwd: &Path) -> Option<PathBuf> {
     cwd.ancestors()
         .flat_map(|directory| REPOSITORY_PATHS.map(|relative| directory.join(relative)))
@@ -116,9 +87,6 @@ mod tests {
     use super::*;
 
     /// Writes a config at `path`, making whatever directories it needs first.
-    ///
-    /// Every repository test is that pair of lines, and the directory form cannot skip the first —
-    /// which is the step a test would forget while adding the flat form beside it.
     fn write_config(path: &Path) {
         fs::create_dir_all(path.parent().expect("a config path has a parent")).unwrap();
         fs::write(path, "default = 'x'\n").unwrap();
@@ -157,7 +125,6 @@ mod tests {
         assert_eq!(user(None, None, None, None), None);
     }
 
-    /// The two the caller named are the two whose absence is a failure.
     #[test]
     fn only_a_path_the_caller_named_is_one_this_tool_must_find() {
         assert!(user(Some(Path::new("/a.toml")), None, None, None).unwrap().named());
@@ -166,7 +133,6 @@ mod tests {
         assert!(!user(None, None, None, Some("/home".as_ref())).unwrap().named());
     }
 
-    /// Both forms are the same layer, found the same way, from anywhere beneath them.
     #[test]
     fn a_repository_config_is_found_from_any_directory_beneath_it() {
         for relative in REPOSITORY_PATHS {
@@ -194,7 +160,6 @@ mod tests {
         assert_eq!(repository(root.path()), Some(outer));
     }
 
-    /// The tie the constant's order exists to settle, and the only thing it settles.
     #[test]
     fn the_directory_form_wins_over_a_flat_file_in_the_same_directory() {
         let root = tempfile::tempdir().unwrap();
@@ -205,8 +170,6 @@ mod tests {
         assert_eq!(repository(root.path()), Some(directory_form));
     }
 
-    /// Nearest beats form, which is what a walk that exhausted one spelling before trying the other
-    /// would get wrong — and would get wrong silently, since both configs are real files.
     #[test]
     fn a_nearer_flat_file_beats_a_directory_form_further_up() {
         let root = tempfile::tempdir().unwrap();
@@ -225,7 +188,6 @@ mod tests {
         assert_eq!(repository(root.path()), None);
     }
 
-    /// A directory of that name is not a config file, so the walk keeps going.
     #[test]
     fn a_directory_where_the_file_should_be_is_not_a_config() {
         for relative in REPOSITORY_PATHS {

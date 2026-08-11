@@ -1,8 +1,4 @@
 //! Every interaction with herdr, and the seam that runs them.
-//!
-//! No module outside this one spawns a process or names the `herdr` binary. The module root carries
-//! [`run`], [`run_text`], and the stream discipline both depend on; `surface` owns the three ways to
-//! make a pane and `agent` owns what a command does to an agent in one.
 
 pub mod agent;
 pub mod surface;
@@ -19,13 +15,10 @@ use crate::cmd::ExitStatus;
 // Constants
 // =====================================================================================================================
 
-/// The binary every call in this crate runs. Named in exactly one place.
+/// The binary every call in this crate runs.
 const BINARY: &str = "herdr";
 
 /// The environment variable herdr exports into every pane it owns, holding that pane's id.
-///
-/// Lives here rather than in a command because it is a fact about herdr's contract, and it has two
-/// readers: `spawn` anchors a split on it, and the mail envelope resolves the sender from it.
 pub const PANE_VARIABLE: &str = "HERDR_PANE_ID";
 
 // =====================================================================================================================
@@ -36,11 +29,7 @@ pub const PANE_VARIABLE: &str = "HERDR_PANE_ID";
 ///
 /// # Errors
 ///
-/// Returns a [`HerdrError`]: [`Spawn`](HerdrError::Spawn) when herdr cannot be launched,
-/// [`Refused`](HerdrError::Refused) when herdr answered with its own error object,
-/// [`Failed`](HerdrError::Failed) when it exited non-zero without one, and
-/// [`Unreadable`](HerdrError::Unreadable) when it succeeded but printed something `T` could not be
-/// read from.
+/// Returns a [`HerdrError`] naming which stage failed.
 pub fn run<T: DeserializeOwned>(args: &[String]) -> Result<T, HerdrError> {
     let stdout = run_text(args)?;
     serde_json::from_str::<Envelope<T>>(&stdout)
@@ -48,16 +37,10 @@ pub fn run<T: DeserializeOwned>(args: &[String]) -> Result<T, HerdrError> {
         .map_err(|source| HerdrError::Unreadable { command: command_name(args), source })
 }
 
-/// Runs one herdr command and returns its stdout verbatim.
+/// Runs one herdr command and returns its stdout verbatim, for the calls herdr answers with raw
+/// text rather than JSON.
 ///
-/// `agent read` is the reason this exists: it prints the terminal snapshot as raw text rather than
-/// as JSON, so the composer guard needs the bytes rather than a parse. Everything else goes through
-/// [`run`], which is this plus a deserialize.
-///
-/// The two streams are captured **separately**. Merging them works right up until herdr writes
-/// anything at all to stderr on an otherwise successful call — a deprecation notice, a reconnect
-/// warning — at which point the JSON is preceded by prose and the parse dies, and the caller reports
-/// a missing pane id for a surface that was actually created.
+/// The two streams are captured separately; see the style guide's herdr seam section.
 ///
 /// # Errors
 ///
@@ -75,8 +58,7 @@ pub fn run_text(args: &[String]) -> Result<String, HerdrError> {
     }
 }
 
-/// herdr's response envelope. Only `result` is read: `id` is the request id this crate set and has
-/// nothing to say back.
+/// herdr's response envelope; only `result` is read.
 #[derive(serde::Deserialize)]
 struct Envelope<T> {
     result: T,
@@ -89,7 +71,7 @@ struct Envelope<T> {
 /// Failure of a herdr invocation.
 ///
 /// Every variant carries the herdr command's **name** and never its arguments — the argument to
-/// `agent prompt` is the prompt text, and an agent's arguments ride on `agent start`.
+/// `agent prompt` is the prompt text.
 #[derive(Debug, Error)]
 pub enum HerdrError {
     /// herdr could not be launched — not installed, or not on `PATH`.
@@ -114,9 +96,8 @@ pub enum HerdrError {
     /// herdr exited non-zero without an error object — a client-side refusal, which it reports as a
     /// plain line with exit 2.
     ///
-    /// The message is stderr's **first line only**. That line can never hold a prompt or an agent's
-    /// arguments: herdr takes the prompt positionally at index 1 before it starts reading options,
-    /// and agent arguments live after `--`, past everything its parser echoes.
+    /// The message is stderr's **first line only**, which can never hold a prompt or an agent's
+    /// arguments.
     #[error("herdr {command} failed: {message}")]
     Failed {
         /// The herdr command that failed.
@@ -124,16 +105,11 @@ pub enum HerdrError {
         /// herdr's first line of stderr.
         message: String,
         /// herdr's own process exit status, absent when a signal ended it.
-        ///
-        /// Kept because it is the only thing that separates herdr rejecting the argument vector
-        /// this crate handed it from herdr failing at the work — see
-        /// [`exit_status`](HerdrError::exit_status).
         status: Option<i32>,
     },
     /// herdr succeeded but printed something this call could not read.
     ///
-    /// Deliberately does not quote the output. `agent read`'s output is someone's terminal, and one
-    /// variant that sometimes carries terminal content is one variant too many.
+    /// Never quotes the output — `agent read`'s output is someone's terminal.
     #[error("herdr {command} printed output this build could not read: {source}")]
     Unreadable {
         /// The herdr command whose output could not be read.
@@ -155,19 +131,9 @@ impl HerdrError {
 
     /// The exit status this failure maps to.
     ///
-    /// Matches on herdr's own code and maps only the codes with a meaningful non-`1` answer; an
-    /// unrecognized code is a general failure, not a compile error. herdr grows codes, and a match
-    /// that had to be exhaustive over them would be a second copy of herdr's vocabulary.
-    ///
-    /// The one thing read before the code is herdr's own exit status, and only the value that means
-    /// the same thing on both sides of the seam. herdr answers a bad argument the way this crate
-    /// does — a plain line and exit 2, with no error object and so no code — and every argument in
-    /// the vector it rejected came from a flag this crate's caller set. Forwarding it keeps
-    /// `--wait-until nonsense` a usage error rather than an operational one, which is a distinction
-    /// a caller branching on the contract acts on.
-    ///
-    /// A plain method rather than an [`AsExitStatus`](crate::cmd::AsExitStatus) impl, because every
-    /// command wraps this in an enum of its own and all of them delegate here.
+    /// Only the codes with a meaningful non-`1` answer are mapped; an unrecognized code is a
+    /// general failure, not a compile error. herdr's own exit 2 — its parser rejecting an argument
+    /// a caller's flag supplied — is forwarded as a usage error rather than an operational one.
     pub fn exit_status(&self) -> ExitStatus {
         if let Self::Failed { status: Some(2), .. } = self {
             return ExitStatus::Usage;
@@ -175,11 +141,8 @@ impl HerdrError {
         match self.code() {
             Some("agent_target_ambiguous") => ExitStatus::Usage,
             Some("agent_not_found" | "agent_pane_not_found" | "pane_not_found") => ExitStatus::NotFound,
-            // `worktree_operation_in_progress` is herdr saying another create or remove is already
-            // running against that checkout, which is transient by construction. The other worktree
-            // codes stay a general failure, correctly: `not_git_worktree` and
-            // `linked_worktree_source` are about where the caller is, and `worktree_create_failed`
-            // is git refusing. None of those improves on a retry.
+            // `worktree_operation_in_progress` is transient — another create or remove is running;
+            // the other worktree codes do not improve on a retry.
             Some(
                 "agent_pane_busy" | "agent_prompt_stalled" | "agent_name_taken" | "worktree_operation_in_progress",
             ) => ExitStatus::Conflict,
@@ -189,33 +152,18 @@ impl HerdrError {
 
     /// Whether herdr is saying a submission may never have landed, rather than that it refused it.
     ///
-    /// One code, because only one of herdr's means this. `agent_prompt_stalled` is herdr watching for
-    /// any state change in the five seconds after it submitted and seeing none — the prompt may have
-    /// been swallowed, so re-sending it risks nothing.
-    ///
-    /// `timeout` is deliberately not here, and putting it here is a duplicate-delivery bug. herdr
-    /// submits the prompt *before* it starts waiting, so `timeout` says the requested state never
-    /// arrived, never that the text failed to land. A caller that re-sends on it delivers the same
-    /// message twice.
-    ///
-    /// Lives here rather than beside the caller because these are herdr's codes, and this module is
-    /// where herdr's vocabulary is read — the same reason [`exit_status`](Self::exit_status) is here.
+    /// `agent_prompt_stalled` only. `timeout` must stay out: herdr submits *before* it waits, so a
+    /// timeout never means the text failed to land, and re-sending on it delivers twice.
     pub fn is_undelivered(&self) -> bool {
         matches!(self.code(), Some("agent_prompt_stalled"))
     }
 
     /// Whether herdr answered that the target does not exist.
-    ///
-    /// Distinguished from every other refusal because the two have opposite meanings for the mail
-    /// envelope: a pane herdr owns but hosts no agent in is a pane a person is typing in, where any
-    /// other failure leaves an agent possibly present and the pane id still worth addressing.
     pub fn is_not_found(&self) -> bool {
         matches!(self.code(), Some("agent_not_found"))
     }
 
     /// herdr's command and code, for nesting inside this crate's own error envelope.
-    ///
-    /// Nested rather than emitted flat, so a consumer can still tell our failures from herdr's.
     pub fn reference(&self) -> HerdrRef {
         HerdrRef {
             command: self.command().to_owned(),
@@ -250,9 +198,7 @@ pub struct HerdrRef {
 
 /// The herdr command's name: the group and the subcommand, and nothing after them.
 ///
-/// Every call in this crate is built as `<group> <subcommand> [target] [args…]`, so two words is
-/// the whole name — and stopping there is what keeps a target, a prompt, and an agent's arguments
-/// out of every error message this module produces.
+/// Stopping at two words is what keeps a target and a prompt out of every error message.
 fn command_name(args: &[String]) -> String {
     args.iter().take(2).cloned().collect::<Vec<String>>().join(" ")
 }
@@ -260,7 +206,7 @@ fn command_name(args: &[String]) -> String {
 /// Reads herdr's stderr into a typed failure.
 ///
 /// herdr's error object is `{"error":{"code":…,"message":…}}`; anything else is a client-side
-/// refusal it printed as a plain line, and there `status` is the only classification there is.
+/// refusal printed as a plain line.
 fn classify(command: String, stderr: &[u8], status: Option<i32>) -> HerdrError {
     #[derive(serde::Deserialize)]
     struct Reported {
@@ -279,8 +225,7 @@ fn classify(command: String, stderr: &[u8], status: Option<i32>) -> HerdrError {
             code: reported.error.code,
             message: reported.error.message,
         },
-        // RS-002: the parse failure says nothing useful about a line that was never JSON, and the
-        // replacement carries strictly more — herdr's own words.
+        // RS-002: a parse failure over a line that was never JSON says less than herdr's own words.
         Err(_) => HerdrError::Failed {
             command,
             message: first_line(&text),
@@ -313,8 +258,6 @@ mod tests {
 
     #[test]
     fn a_command_name_is_the_group_and_the_subcommand_and_never_an_argument() {
-        // The third argv word is the target, and for `agent prompt` the fourth is the prompt text.
-        // Neither may reach an error message, so the name stops at two words.
         assert_eq!(
             command_name(&args(&["agent", "prompt", "reviewer", "ship it"])),
             "agent prompt"
@@ -335,15 +278,11 @@ mod tests {
         let error = classify("agent start".to_owned(), stderr, Some(1));
 
         assert_eq!(error.code(), Some("agent_pane_busy"));
-        // The Display form *is* herdr's message; nothing re-words it.
         assert_eq!(error.to_string(), "agent target pane w4:p16 is not an available shell");
     }
 
     #[test]
     fn stderr_that_is_not_a_json_error_object_becomes_a_plain_failure_naming_the_command() {
-        // herdr refuses some things client-side with a plain line and no error object — an
-        // unsupported kind, a value its own parser rejects. Those carry no code, so the only
-        // classification left is the process status herdr exited with.
         let error = classify(
             "agent start".to_owned(),
             b"unsupported interactive agent kind: clawd\n",
@@ -357,11 +296,6 @@ mod tests {
         );
     }
 
-    /// herdr's exit 2 is this crate's exit 2, because the argument vector it rejected was ours.
-    ///
-    /// The case that pays for it: `--wait-until nonsense` is forwarded unvalidated — herdr owns the
-    /// status vocabulary — and herdr's own parser rejects it. Reported as a general failure, an
-    /// agent branching on the contract retries its own bad argument as if it were operational.
     #[test]
     fn herdrs_own_argument_rejection_stays_a_usage_error_on_this_side_of_the_seam() {
         let rejected = classify(
@@ -391,21 +325,14 @@ mod tests {
             ("agent_target_ambiguous", ExitStatus::Usage),
             ("agent_not_found", ExitStatus::NotFound),
             ("agent_pane_not_found", ExitStatus::NotFound),
-            // `pane close`'s answer for a target that names nothing, which is how `kill` learns that
-            // a string it passed through was not a pane id after all.
             ("pane_not_found", ExitStatus::NotFound),
             ("agent_pane_busy", ExitStatus::Conflict),
             ("agent_prompt_stalled", ExitStatus::Conflict),
             ("agent_name_taken", ExitStatus::Conflict),
-            // Another create or remove already running against that checkout — transient by
-            // construction, so it is the one worktree code worth retrying.
             ("worktree_operation_in_progress", ExitStatus::Conflict),
-            // The other three a worktree spawn can meet. Two are about where the caller is and one
-            // is git refusing; retrying any of them changes nothing.
             ("not_git_worktree", ExitStatus::Failure),
             ("linked_worktree_source", ExitStatus::Failure),
             ("worktree_create_failed", ExitStatus::Failure),
-            // Anything herdr grows later is a general failure, not a compile error.
             ("agent_launch_pending", ExitStatus::Failure),
             ("something_herdr_added_last_week", ExitStatus::Failure),
         ] {
@@ -420,8 +347,6 @@ mod tests {
 
     #[test]
     fn only_the_code_that_means_the_prompt_may_never_have_landed_is_undelivered() {
-        // The re-send is for a submission herdr says it saw no effect from — never for one it
-        // refused, which re-sending would only refuse again.
         let stalled = HerdrError::Refused {
             command: "agent prompt".to_owned(),
             code: "agent_prompt_stalled".to_owned(),
@@ -429,10 +354,7 @@ mod tests {
         };
         assert!(stalled.is_undelivered());
 
-        // `timeout` is the one that must stay out, and it is a duplicate-delivery bug when it does
-        // not. herdr submits the prompt before it starts waiting, so a timeout says the requested
-        // state never arrived — never that the text failed to land. Re-sending on it sent every
-        // message to a busy agent twice.
+        // `timeout` is the one that must stay out — see [`HerdrError::is_undelivered`].
         for code in ["timeout", "agent_not_found", "agent_target_ambiguous"] {
             let error = HerdrError::Refused {
                 command: "agent prompt".to_owned(),

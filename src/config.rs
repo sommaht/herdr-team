@@ -1,15 +1,4 @@
 //! The config file: its schema, where the two layers are found, and how they are read.
-//!
-//! The only disk I/O in the crate, which is the boundary this module names — including the files a
-//! config *points at*, since `prompt_file` is a config field and the file it names is part of the
-//! config. Nothing here is loaded eagerly: `prompt` never reads a config, and a malformed file must
-//! not break it.
-//!
-//! Three vocabularies, deliberately three types. [`DeclaredAgent`] is what one file's TOML holds,
-//! where every field is optional because a `base` may supply any of them. [`Declared`] is that bound
-//! to the file it came from, so a relative `prompt_file` and the source the listing reports both
-//! survive a merge. [`Agent`] is what a caller gets: a base chain already applied, a `kind` that
-//! exists, and nothing left to look up.
 
 mod discover;
 mod resolve;
@@ -50,22 +39,14 @@ effort = 'xhigh'";
 // =====================================================================================================================
 
 /// One config file, exactly as it parses.
-///
-/// `deny_unknown_fields` on purpose. A config is small and hand-written, and a `modle = 'opus'` that
-/// parsed to nothing would start the wrong model without saying so. The one unknown key this file
-/// *names* is `presets`, so its rename can be reported as a rename rather than as a typo.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ConfigFile {
     /// The agent a bare `spawn` uses.
     ///
-    /// Optional per file — a repository layer may add agents without changing which one is default —
-    /// but required of the layers together.
+    /// Optional per file, but required of the layers together.
     default: Option<String>,
     /// Every agent this file declares, keyed by name.
-    ///
-    /// A `BTreeMap` so the listing, an error's list of available names, and the merge all come out in
-    /// a stable order without a sort at each site.
     #[serde(default)]
     agents: BTreeMap<String, DeclaredAgent>,
     /// What `[agents]` used to be called, declared only so its presence can be reported.
@@ -74,16 +55,11 @@ struct ConfigFile {
 
 /// One agent as a file declares it.
 ///
-/// Every field is optional, `kind` included: an agent with a `base` inherits whatever it does not
-/// state, so which fields are actually required is a question about the *resolved* agent.
+/// Every field is optional, `kind` included: a `base` may supply whatever this file does not state.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct DeclaredAgent {
     /// The agent kind, passed to `agent start --kind` untouched.
-    ///
-    /// A plain `String` deliberately. herdr answers `unsupported_agent_kind` from its own
-    /// compile-time list, that list is not published anywhere machine-readable, and the number of
-    /// kinds it recognizes grows — so restating it here would drift.
     kind: Option<String>,
     /// Another agent to inherit from, by name.
     base: Option<String>,
@@ -92,10 +68,6 @@ struct DeclaredAgent {
     /// The reasoning effort, likewise.
     effort: Option<String>,
     /// The flags appended after `--`, as an argument vector.
-    ///
-    /// An array only. A string form would have to be split into shell words, which means
-    /// reimplementing shell word-splitting for a value handed straight to `Command`; herdr takes the
-    /// agent's arguments as an argument vector, so nothing here needs shell quoting.
     #[serde(default)]
     args: Vec<String>,
     /// A file prepended to this agent's first prompt, relative to the declaring file's directory.
@@ -103,9 +75,6 @@ struct DeclaredAgent {
 }
 
 /// A declared agent bound to the file that declared it.
-///
-/// The binding is what lets `prompt_file` be resolved once and `source` be reported after a merge has
-/// mixed two files' agents into one map.
 #[derive(Clone, Debug)]
 struct Declared {
     kind: Option<String>,
@@ -151,14 +120,7 @@ struct Layer {
 impl Layer {
     /// Reads one file.
     ///
-    /// `Ok(None)` when it is not there, which is not a failure here: whether a given path *had* to
-    /// exist is the caller's question, and a repository layer may be the whole config.
-    ///
-    /// # Errors
-    ///
-    /// [`ConfigError::Unreadable`] when the file cannot be opened, [`ConfigError::Malformed`] when it
-    /// is not valid TOML or holds a key this build does not know, and [`ConfigError::LegacyPresets`]
-    /// when it still uses the table's old name.
+    /// `Ok(None)` when it is not there; whether it had to exist is the caller's question.
     fn read(path: &Path) -> Result<Option<Self>, ConfigError> {
         let contents = match std::fs::read_to_string(path) {
             Ok(contents) => contents,
@@ -170,8 +132,7 @@ impl Layer {
 
         let file: ConfigFile =
             toml::from_str(&contents).map_err(|source| ConfigError::Malformed { path: path.to_owned(), source })?;
-        // Checked after the parse rather than instead of it, so a file with both a `[presets]` table
-        // and a syntax error reports the syntax error it would report either way.
+        // Checked after the parse, so a file with both problems still reports its syntax error.
         if file.presets.is_some() {
             return Err(ConfigError::LegacyPresets { path: path.to_owned() });
         }
@@ -193,10 +154,6 @@ impl Layer {
 // =====================================================================================================================
 
 /// One agent, with its base chain applied.
-///
-/// The fields stay private and [`resolve`] constructs this anyway — a child module may read its
-/// ancestors' private items, which is exactly the visibility wanted here: `resolve` is the only thing
-/// that may say what "resolved" means, and everything outside `config` reads through the accessors.
 #[derive(Clone, Debug, Getters)]
 pub struct Agent {
     /// The agent kind, passed to `agent start --kind` untouched.
@@ -209,7 +166,7 @@ pub struct Agent {
     args: Vec<String>,
     /// A file prepended to this agent's first prompt, absolute.
     prompt_file: Option<PathBuf>,
-    /// The config file that declared this agent, which is the question two layers create.
+    /// The config file that declared this agent.
     source: PathBuf,
 }
 
@@ -217,12 +174,8 @@ impl Agent {
     /// Every argument `agent start` receives from the config: the chain's flags, then the ones the
     /// resolved harness spells `model` and `effort` as.
     ///
-    /// The order is the precedence. Agent CLIs are last-flag-wins, so a first-class field beats an
-    /// `args` entry that sets the same thing — and `spawn -- <extra>`, appended after this, beats
-    /// both.
-    ///
-    /// A kind with no harness contributes nothing here, which is safe because [`resolve`] has already
-    /// dropped any agent that set `model` or `effort` under one.
+    /// The order is the precedence: agent CLIs are last-flag-wins, so a first-class field beats an
+    /// `args` entry setting the same thing, and `spawn -- <extra>`, appended after this, beats both.
     pub fn agent_args(&self) -> Vec<String> {
         let mut args = self.args.clone();
         if let Some(harness) = harness::by_kind(&self.kind) {
@@ -233,25 +186,15 @@ impl Agent {
 
     /// This agent's brief, read from `prompt_file`.
     ///
-    /// Read here rather than by the caller because `prompt_file` is a config field and the file it
-    /// names is part of the config, which keeps every disk read inside the module that names disk I/O
-    /// as its boundary.
-    ///
-    /// # Errors
-    ///
-    /// [`ConfigError::UnreadableBrief`] when the file is not there or cannot be opened, and
-    /// [`ConfigError::BlankBrief`] when it holds nothing to deliver. Both are refusals rather than
-    /// warnings: an agent that silently starts without the brief it was configured with is the
-    /// failure this exists to prevent, and a caller learns it before anything has been created.
+    /// A missing or blank file is a refusal, not a warning: the agent must not silently start
+    /// without the brief it was configured with.
     pub fn brief(&self) -> Result<Option<NonEmptyText>, ConfigError> {
         let Some(path) = &self.prompt_file else {
             return Ok(None);
         };
         let text = std::fs::read_to_string(path)
             .map_err(|source| ConfigError::UnreadableBrief { path: path.clone(), source })?;
-        // RS-002: the source is discarded because it carries nothing — `BlankTextError` is a unit
-        // type, deliberately, since the text it rejected is a prompt. This says strictly more: which
-        // file was blank, which is the half a reader has to act on.
+        // RS-002: `BlankTextError` is a unit type carrying nothing; the replacement names the file.
         text.parse()
             .map(Some)
             .map_err(|_| ConfigError::BlankBrief { path: path.clone() })
@@ -274,14 +217,7 @@ pub struct Config {
 impl Config {
     /// Reads the config, merging a repository layer over the user's.
     ///
-    /// `cwd` is where the repository walk starts — `spawn`'s `--cwd`, so the config found is the one
-    /// belonging to the tree the agent will work in. `None` means the process directory.
-    ///
-    /// # Errors
-    ///
-    /// [`ConfigError::NoConfigDir`] when there is nowhere to look, [`ConfigError::Missing`] when a
-    /// path the caller named is not there or no layer was found at all, [`ConfigError::NoDefault`]
-    /// when the layers between them declare none, and whatever [`Layer::read`] returned.
+    /// `cwd` is where the repository walk starts; `None` means the process directory.
     pub fn load(explicit: Option<&Path>, cwd: Option<&Path>, sink: &Sink) -> Result<Self, ConfigError> {
         let environment = std::env::var_os(PATH_VARIABLE);
         let xdg = std::env::var_os("XDG_CONFIG_HOME");
@@ -292,16 +228,12 @@ impl Config {
         let mut layers = Vec::new();
         match Layer::read(user.path())? {
             Some(layer) => layers.push(layer),
-            // A caller who named a path is asking about that path. The config directory's default
-            // location is only a place to look, and a repository layer may be the whole config.
             None if user.named() => {
                 return Err(ConfigError::Missing { path: user.path().to_owned() });
             }
             None => {}
         }
 
-        // One chain rather than three nestings: each link is a step of the same lookup, and a
-        // repository layer exists only when every one of them answers.
         if let Some(directory) = working_directory(cwd, sink)
             && let Some(path) = discover::repository(&directory)
             && let Some(layer) = Layer::read(&path)?
@@ -316,13 +248,6 @@ impl Config {
     }
 
     /// The layers, merged and resolved.
-    ///
-    /// Split from [`load`](Self::load) so the merge rule and the `default` requirement are testable
-    /// against files a test wrote, with no environment and no discovery.
-    ///
-    /// # Errors
-    ///
-    /// [`ConfigError::NoDefault`] when no layer declared one.
     fn of(layers: Vec<Layer>, sink: &Sink) -> Result<Self, ConfigError> {
         let paths = layers
             .iter()
@@ -333,9 +258,7 @@ impl Config {
         let mut default = None;
         let mut declared: BTreeMap<String, Declared> = BTreeMap::new();
         for layer in layers {
-            // `extend` replaces by key, which is the whole-agent replacement the design calls for: a
-            // repository agent that wants the user's flags says `base`, rather than having its fields
-            // blended with a file it cannot see.
+            // `extend` replaces by key: a later layer replaces an agent whole, never field-by-field.
             default = layer.default.or(default);
             declared.extend(layer.agents);
         }
@@ -356,11 +279,8 @@ impl Config {
 
     /// Looks an agent up, falling back to the config's `default`.
     ///
-    /// # Errors
-    ///
-    /// [`ConfigError::UnknownAgent`], listing the names that resolved — names only, because an
-    /// agent's arguments must not reach an error message. An agent dropped during resolution is
-    /// absent from that list, and the warning saying why was printed when the config was read.
+    /// An agent dropped during resolution is absent from the error's list of names; the warning
+    /// saying why was printed when the config was read.
     pub fn resolve(&self, name: Option<&str>) -> Result<&Agent, ConfigError> {
         let name = name.unwrap_or(&self.default);
         self.agents.get(name).ok_or_else(|| ConfigError::UnknownAgent {
@@ -385,8 +305,7 @@ pub enum ConfigError {
     /// No `--config`, no environment override, and no config or home directory to fall back on.
     #[error("no config directory to look for a config file in; pass --config <PATH>")]
     NoConfigDir,
-    /// A path the caller named is not there, or no layer was found at all. The message carries a
-    /// working example, since the usual cause is that it was never written.
+    /// A path the caller named is not there, or no layer was found at all.
     #[error("no config file at {}; create it with:\n\n{EXAMPLE}", path.display())]
     Missing {
         /// Where it was looked for.
@@ -449,14 +368,6 @@ pub enum ConfigError {
 
 impl ConfigError {
     /// The exit status this failure maps to.
-    ///
-    /// A plain method rather than an [`AsExitStatus`](crate::cmd::AsExitStatus) impl, because two
-    /// commands wrap this in enums of their own and both delegate here — one owner for the mapping,
-    /// reachable from either.
-    ///
-    /// The three brief failures share one code with the two lookup failures: they are one class from
-    /// a caller's side — you named something and it is not there — and one code is what a caller can
-    /// branch on.
     pub fn exit_status_hint(&self) -> ExitStatus {
         match self {
             Self::Missing { .. }
@@ -478,9 +389,7 @@ impl ConfigError {
 
 /// Where the repository walk starts.
 ///
-/// `None` only when the caller named no directory and the process's own cannot be read — which is not
-/// a config failure, because the caller did not ask about a directory. It costs the repository layer,
-/// so it is said rather than swallowed.
+/// An unreadable process directory costs only the repository layer, so it is warned, not failed.
 fn working_directory(cwd: Option<&Path>, sink: &Sink) -> Option<PathBuf> {
     match cwd {
         Some(path) => Some(path.to_owned()),
@@ -550,8 +459,6 @@ prompt_file = 'review.md'
 
     #[test]
     fn an_agents_name_is_its_table_key_and_every_field_but_that_is_optional() {
-        // The name is the key, so a duplicate name is inexpressible rather than last-one-wins, and
-        // there is no `name` field that could disagree with it.
         let (_directory, path) = written(SAMPLE);
 
         let layer = Layer::read(&path).unwrap().expect("the file is there");
@@ -569,10 +476,6 @@ prompt_file = 'review.md'
         assert!(reviewer.args.is_empty());
     }
 
-    /// A relative `prompt_file` is resolved as the layer is read, against the file that declared it.
-    ///
-    /// Done here rather than at spawn because a merge mixes two files' agents into one map, after
-    /// which nothing downstream can say which directory a path was written relative to.
     #[test]
     fn a_prompt_file_is_absolute_by_the_time_it_leaves_the_layer() {
         let (directory, path) = written(SAMPLE);
@@ -595,7 +498,6 @@ prompt_file = 'review.md'
         assert_eq!(layer.agents["cc"].source, path);
     }
 
-    /// The rename is reported as a rename, not as a typo.
     #[test]
     fn a_file_still_using_the_old_table_name_is_told_what_it_is_now_called() {
         let (_directory, path) = written("default = 'x'\n\n[presets.x]\nkind = 'claude'\n");
@@ -607,7 +509,6 @@ prompt_file = 'review.md'
         assert!(error.to_string().contains("[agents]"), "got {error}");
     }
 
-    /// A hand-written file is small enough that a silently-ignored key is worse than a refusal.
     #[test]
     fn a_misspelled_field_is_a_parse_failure_rather_than_a_field_that_does_nothing() {
         let (_directory, path) = written("[agents.x]\nkind = 'claude'\nmodle = 'opus'\n");
@@ -619,8 +520,6 @@ prompt_file = 'review.md'
 
     #[test]
     fn malformed_toml_fails_closed_and_names_the_parse_error() {
-        // The shell version's reader failed open: malformed input yielded an empty document and
-        // exit 0, so one typo surfaced as "agent not found" and sent you hunting the wrong file.
         let (_directory, path) = written("default = ");
 
         let error = Layer::read(&path).unwrap_err();
@@ -629,8 +528,6 @@ prompt_file = 'review.md'
         assert!(error.to_string().contains("is not valid TOML"), "got {error}");
     }
 
-    /// A file that is not there is not a failure *here*: whether it had to exist is the caller's
-    /// question, and a repository layer may be the whole config.
     #[test]
     fn an_absent_file_is_an_absent_layer_rather_than_an_error() {
         let directory = tempfile::tempdir().unwrap();
@@ -638,7 +535,6 @@ prompt_file = 'review.md'
         assert!(Layer::read(&directory.path().join("absent.toml")).unwrap().is_none());
     }
 
-    /// Neither layer has to declare `default`, and neither has to declare agents.
     #[test]
     fn a_layer_may_add_agents_without_naming_a_default_or_name_one_without_adding_agents() {
         let (_a, agents_only) = written("[agents.x]\nkind = 'claude'\n");
@@ -655,8 +551,6 @@ prompt_file = 'review.md'
 
     #[test]
     fn a_repository_agent_replaces_the_users_whole_rather_than_field_by_field() {
-        // `base` is how a repository inherits; a second, implicit blend across files would make the
-        // effective config unreadable from either file alone.
         let (_root, user, repository) = layered(
             "default = 'opus'\n\n[agents.opus]\nkind = 'claude'\nmodel = 'opus'\neffort = 'xhigh'\n",
             "[agents.opus]\nkind = 'claude'\nargs = ['--verbose']\n",
@@ -716,7 +610,6 @@ prompt_file = 'review.md'
 
     #[test]
     fn an_unknown_agent_lists_the_names_the_config_holds_and_never_their_args() {
-        // Names only: an agent's arguments must not reach an error message.
         let (_directory, path) = written(SAMPLE);
         let config = merged(&[&path]);
 
@@ -727,7 +620,6 @@ prompt_file = 'review.md'
         assert!(!error.to_string().contains("--disallowed-tools"));
     }
 
-    /// The order is the precedence: a first-class field beats an `args` entry setting the same thing.
     #[test]
     fn the_argument_vector_is_the_configs_flags_then_the_ones_the_harness_spells() {
         let (_directory, path) = written(
@@ -766,8 +658,6 @@ prompt_file = 'review.md'
         assert_eq!(brief.unwrap().to_string(), "You review Rust.");
     }
 
-    /// A refusal rather than a drop, and deliberately: an agent that silently starts without the
-    /// brief it was configured with is the failure this is here to prevent.
     #[test]
     fn a_prompt_file_that_is_missing_or_blank_is_a_refusal() {
         let directory = tempfile::tempdir().unwrap();

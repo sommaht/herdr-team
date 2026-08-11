@@ -1,10 +1,6 @@
 //! `herdr-team` — launch and message herdr agents from one command.
 //!
-//! Parses and dispatches; no command logic lives here. There is no `cli` module: even at five
-//! commands the dispatch match is a handful of lines, and a file holding only module declarations
-//! plus that match would name no boundary. What this file does own beyond dispatch is the argument
-//! failure — clap's rejection has to reach the caller under the same output contract as every other
-//! failure, and without repeating what the caller typed.
+//! Parses and dispatches, and restates clap's rejection without repeating what the caller typed.
 
 mod cmd;
 mod config;
@@ -60,15 +56,12 @@ struct Cli {
     json: bool,
 }
 
-/// The subcommand set. Variants carry no doc comments deliberately: each command's help is owned by
-/// its `*Args` struct, next to the flags it documents.
+/// The subcommand set. A doc comment on a variant becomes that command's `--help` summary, so each
+/// command's help lives on its `*Args` struct instead.
 #[derive(Debug, Subcommand)]
 enum Command {
     Spawn(SpawnArgs),
-    // Not a doc comment, for the reason stated above: on this enum a doc comment *is* the
-    // subcommand's help, and this command's help belongs to `MsgArgs`. `msg` was called `prompt`
-    // until this build and still answers to it — hidden rather than visible, because the help should
-    // teach one name. An alias is a courtesy to whoever learned the other, not a second way in.
+    // `prompt` is the retired spelling of `msg`; hidden so the help teaches one name.
     #[command(alias = "prompt")]
     Msg(MsgArgs),
     Kill(KillArgs),
@@ -84,8 +77,6 @@ fn main() -> ExitCode {
     match Cli::try_parse() {
         Ok(cli) => {
             let mode = if cli.json { OutputMode::Json } else { OutputMode::Human };
-            // Built before any command runs, so a failure that happens before one starts renders
-            // under the same contract as everything else.
             let sink = Sink::new(mode);
 
             match cli.command {
@@ -96,16 +87,11 @@ fn main() -> ExitCode {
                 Command::Prime(args) => run(args, &sink),
             }
         }
-        // `try_parse` rather than `parse`, which prints clap's own prose and exits before a sink
-        // exists — see [`report_argument_failure`].
         Err(error) => report_argument_failure(&error),
     }
 }
 
 /// Runs one command and maps its outcome to the process exit code.
-///
-/// The sink comes last: it is the context a command reports through, not the thing the command acts
-/// on.
 fn run<C: Cmd>(command: C, sink: &Sink) -> ExitCode {
     match command.execute(sink) {
         Ok(value) => {
@@ -130,29 +116,18 @@ fn run<C: Cmd>(command: C, sink: &Sink) -> ExitCode {
 
 /// An argument failure, restated in this crate's own words.
 ///
-/// A type rather than a bare string because the sink renders failures, not messages: this is what
-/// gives clap's rejection the same `{"type":"error","status":2,…}` envelope every other failure has.
+/// A type rather than a bare string so the sink gives it the same envelope as every other failure.
 #[derive(Debug, Error)]
 #[error("{0}")]
 struct ArgumentError(String);
 
 impl AsExitStatus for ArgumentError {
-    /// Always [`ExitStatus::Usage`], which is clap's own code for the same thing.
     fn exit_status(&self) -> ExitStatus {
         ExitStatus::Usage
     }
 }
 
 /// Reports clap's rejection through the sink and maps it to the exit-status contract.
-///
-/// Letting clap print for itself breaks both contracts this binary advertises. A `--json` caller
-/// gets multi-line prose on stderr and nothing at all on stdout — failing to parse on exactly the
-/// errors it most needs to classify — and the prose repeats the offending value back, which for
-/// `msg` and `spawn --msg` is the prompt text.
-///
-/// So the rejection is rebuilt from clap's structured context, and the rebuild is an allowlist:
-/// every word in the result is either a constant in [`describe`] or a name this build declares. See
-/// [`declared_spellings`] for why it is an allowlist rather than a filter over the caller's tokens.
 fn report_argument_failure(error: &clap::Error) -> ExitCode {
     let mode = if json_requested(argv()) {
         OutputMode::Json
@@ -161,12 +136,9 @@ fn report_argument_failure(error: &clap::Error) -> ExitCode {
     };
     let sink = Sink::new(mode);
 
-    // Help and version are answers, not failures: clap reports them as errors because that is how it
-    // stops parsing. Both are documents, so they print as text in either mode — `prime`'s exception,
-    // for `prime`'s reason.
+    // Help and version are answers, not failures: clap reports them as errors only to stop parsing.
     if matches!(error.kind(), ErrorKind::DisplayHelp | ErrorKind::DisplayVersion) {
-        // Trimmed because clap ends its rendering with a newline and the sink writes one of its own,
-        // and a blank line after `--version` is a blank line a caller has to strip.
+        // clap ends its rendering with a newline and the sink writes one of its own.
         sink.out_text(error.render().to_string().trim_end());
         return ExitStatus::Success.into();
     }
@@ -179,10 +151,7 @@ fn report_argument_failure(error: &clap::Error) -> ExitCode {
 
 /// Restates one clap rejection without repeating anything the caller supplied.
 ///
-/// The headline comes from the kind, the detail from the contexts that hold only this build's own
-/// vocabulary: which argument, which values it accepts, and what a value parser of ours said about
-/// it. [`ContextKind::InvalidValue`] is never read — that context *is* the caller's token, and for
-/// two of these commands the caller's token is a prompt.
+/// [`ContextKind::InvalidValue`] is never read — that context *is* the caller's token.
 fn describe(error: &clap::Error, arguments: &[String]) -> String {
     let declared = declared_spellings();
     let ours = |kind| {
@@ -194,21 +163,17 @@ fn describe(error: &clap::Error, arguments: &[String]) -> String {
 
     let detail = match error.kind() {
         ErrorKind::MissingRequiredArgument => with_names("missing a required argument", &ours(ContextKind::InvalidArg)),
-        // Stated rather than asked, because the trailer follows: a question mark mid-sentence reads
-        // as two messages spliced together.
         ErrorKind::UnknownArgument => match ours(ContextKind::SuggestedArg).first() {
             Some(suggestion) => format!("unrecognized argument, closest match {suggestion}"),
             None => "unrecognized argument".to_owned(),
         },
         ErrorKind::InvalidSubcommand | ErrorKind::MissingSubcommand => "no such command".to_owned(),
-        // The valid values are read unfiltered: clap builds that context from the argument's own
-        // possible values, so it can hold nothing but ours.
+        // Read unfiltered: clap builds this context from the argument's own possible values.
         ErrorKind::InvalidValue => with_values(
             &with_names("invalid value for", &ours(ContextKind::InvalidArg)),
             &strings_at(error, ContextKind::ValidValue),
         ),
-        // The source is one of this crate's own value parsers — the agent-name rule, the blank-prompt
-        // refusal — which is the most useful sentence available and safe for the same reason.
+        // The source is one of this crate's own value parsers, so it is safe to quote.
         ErrorKind::ValueValidation => match error.source() {
             Some(source) => format!(
                 "{}: {source}",
@@ -221,8 +186,7 @@ fn describe(error: &clap::Error, arguments: &[String]) -> String {
         ErrorKind::TooManyValues | ErrorKind::TooFewValues | ErrorKind::WrongNumberOfValues => {
             with_names("wrong number of values for", &ours(ContextKind::InvalidArg))
         }
-        // clap grows kinds, and an unrecognized one is a message rather than a compile error — the
-        // exit status is the classification a caller branches on, and it is 2 either way.
+        // clap grows kinds; an unrecognized one still exits 2.
         _ => "invalid arguments".to_owned(),
     };
 
@@ -234,24 +198,19 @@ fn describe(error: &clap::Error, arguments: &[String]) -> String {
 
 /// Every spelling this build declares, in the forms clap puts into an error context.
 ///
-/// The allowlist *is* the redaction. clap's context holds the caller's own tokens beside this
-/// build's names, in the same [`ContextKind::InvalidArg`] slot — an unexpected positional lands
-/// there verbatim. No filter that inspected those tokens could be trusted, because a prompt is
-/// arbitrary text and may spell anything, so the only safe question to ask of a string is whether it
-/// is one of ours.
+/// The allowlist *is* the redaction: clap puts the caller's own tokens in the same context slots.
 fn declared_spellings() -> Vec<String> {
     fn spellings_of(command: &clap::Command, into: &mut Vec<String>) {
         for argument in command.get_arguments() {
-            // The usage spelling — `--wait-until <STATE>`, `<TEXT>` — which is the form clap puts in
-            // a context, plus the bare flags for the contexts that carry those instead.
+            // The usage spelling — `--wait-until <STATE>` — plus the bare flags for the contexts
+            // that carry those instead.
             into.push(argument.to_string());
             into.extend(argument.get_long().map(|long| format!("--{long}")));
             into.extend(argument.get_short().map(|short| format!("-{short}")));
         }
     }
 
-    // Built first: an argument renders its usage spelling only once clap has finalized it, and
-    // `command()` hands back the unfinished builder.
+    // `build()` first: an argument renders its usage spelling only once clap has finalized it.
     let mut root = Cli::command();
     root.build();
 
@@ -292,12 +251,8 @@ fn with_values(detail: &str, values: &[String]) -> String {
 
 /// The subcommand argv named, when it named one this build defines.
 ///
-/// Matched against the declared names rather than taken positionally, so the word that reaches the
-/// message is this build's and not the caller's.
-///
-/// Aliases match too, and answer with the canonical name. A caller still spelling `msg` the way it
-/// was spelled before this build is one the message can teach — pointing at `msg --help` says both
-/// where to look and what the command is called now, where echoing the alias back would say neither.
+/// Matched against declared names so the word in the message is this build's, not the caller's;
+/// an alias answers with the canonical name.
 fn subcommand_named(arguments: &[String]) -> Option<String> {
     let root = Cli::command();
     arguments.iter().skip(1).find_map(|argument| {
@@ -307,13 +262,10 @@ fn subcommand_named(arguments: &[String]) -> Option<String> {
     })
 }
 
-/// Whether argv asked for `--json`, read without a parse.
+/// Whether argv asked for `--json`, read without a parse — the failure path has no parsed [`Cli`].
 ///
-/// The failure path has no parsed [`Cli`] to read the flag off, and a `--json` caller that meets
-/// prose there is the case the contract most has to survive. Two kinds of token are stepped over: a
-/// bare `--`, past which everything belongs to the agent, and the value after `spawn`'s message
-/// flag, which is arbitrary text and may spell this flag. Both of that flag's spellings are listed,
-/// since the retired one still parses.
+/// Steps over a bare `--` and the value after either spelling of the message flag, which is
+/// arbitrary text and may spell this flag.
 fn json_requested(arguments: Vec<String>) -> bool {
     let mut arguments = arguments.into_iter();
     while let Some(argument) = arguments.next() {
@@ -329,11 +281,7 @@ fn json_requested(arguments: Vec<String>) -> bool {
     false
 }
 
-/// This process's arguments, with anything not valid UTF-8 replaced rather than refused.
-///
-/// A lossy read is right for both readers: [`json_requested`] compares against ASCII flags that
-/// cannot survive the replacement, and [`subcommand_named`] compares against names this build
-/// declares.
+/// This process's arguments, with non-UTF-8 replaced: both readers compare against ASCII spellings.
 fn argv() -> Vec<String> {
     std::env::args_os()
         .map(|argument| argument.to_string_lossy().into_owned())
@@ -358,10 +306,7 @@ mod tests {
         describe(&error, &argv(words))
     }
 
-    /// The leak test, and the reason this file rebuilds clap's message at all.
-    ///
-    /// Every one of these argv is a way prompt text reaches the parser and is rejected there. clap's
-    /// own rendering repeats the offending token in the error and again in its tip; this must not.
+    /// Each argv is a way prompt text reaches the parser and is rejected there.
     #[test]
     fn a_rejected_prompt_is_never_repeated_back() {
         let secret = "wait, before you commit, the staging password is hunter2";
@@ -371,7 +316,6 @@ mod tests {
             argv(&["herdr-team", "prompt", secret]),
             argv(&["herdr-team", "spawn", "reviewer", "--msg"]),
             argv(&["herdr-team", "spawn", "reviewer", "--msg", secret, "extra"]),
-            // The retired spelling reaches the same argument, so it is the same leak if it leaks.
             argv(&["herdr-team", "spawn", "reviewer", "--prompt", secret, "extra"]),
             argv(&["herdr-team", "prompt", "reviewer", "--wait-until", secret]),
         ] {
@@ -386,9 +330,7 @@ mod tests {
         }
     }
 
-    /// An unexpected extra positional is where the caller's own token lands in `InvalidArg`, which
-    /// is the context every other arm reads. It is dropped by the allowlist rather than by a check
-    /// on its shape.
+    /// A stray positional lands in `InvalidArg`, the context every other arm reads.
     #[test]
     fn a_stray_positional_is_reported_without_being_named() {
         let rendered = rejection(&["herdr-team", "kill", "reviewer", "extra"]);
@@ -405,13 +347,7 @@ mod tests {
         );
     }
 
-    /// Every command's summary comes from its own `*Args`, not from a note left on the variant.
-    ///
-    /// Written after a doc comment on the `Msg` variant became that command's entire `--help`
-    /// summary — four sentences about an alias, in the list a reader scans to find the command they
-    /// want. clap takes a variant's doc comment as the subcommand's `about` and says nothing about
-    /// it, and `cargo test` cannot see help text, so the leak reached an installed binary. A length
-    /// bound is the cheap shape of "this is a summary": the real ones run to sixty-odd characters.
+    /// clap silently takes a variant's doc comment as that subcommand's `--help` summary.
     #[test]
     fn every_commands_summary_is_the_one_line_its_own_args_declares() {
         let mut root = Cli::command();
@@ -423,6 +359,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("{} has no summary at all", command.get_name()))
                 .to_string();
 
+            // A length bound is the cheap shape of "this is a summary".
             assert!(
                 about.lines().count() == 1 && about.len() <= 100,
                 "{}'s summary is not a summary: {about}",
@@ -461,8 +398,6 @@ mod tests {
 
     #[test]
     fn a_value_the_argument_does_not_accept_is_answered_with_the_ones_it_does() {
-        // The valid list is the useful half and it is all this build's own vocabulary; the value
-        // that was rejected is the caller's and stays out.
         let rendered = rejection(&["herdr-team", "spawn", "reviewer", "--placement", "tba"]);
 
         assert!(!rendered.contains("tba"), "{rendered}");
@@ -471,8 +406,6 @@ mod tests {
         }
     }
 
-    /// A value parser of ours failing is the one case where the detail is worth carrying: the rule
-    /// it states is herdr's, and a caller that cannot see it has to guess at the name it may use.
     #[test]
     fn a_rule_this_build_enforces_is_quoted_because_it_is_this_build_speaking() {
         let rendered = rejection(&["herdr-team", "spawn", "Reviewer"]);
@@ -507,8 +440,6 @@ mod tests {
     /// Neither of the two places `--json` may appear as data is read as the flag.
     #[test]
     fn a_json_that_is_data_rather_than_a_flag_does_not_switch_the_mode() {
-        // A prompt may spell anything, and everything past `--` is the agent's. Both spellings of
-        // the message flag are stepped over, since both still carry that arbitrary text.
         for flag in ["--msg", "--prompt"] {
             assert!(
                 !json_requested(argv(&["herdr-team", "spawn", "worker", flag, "--json"])),
@@ -537,8 +468,6 @@ mod tests {
         }
     }
 
-    /// Every argument spelling clap can name is one the allowlist holds, or the redaction would drop
-    /// the useful half of every message.
     #[test]
     fn the_allowlist_holds_the_spelling_clap_actually_reports() {
         let declared = declared_spellings();

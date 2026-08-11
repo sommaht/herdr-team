@@ -1,8 +1,5 @@
-//! The output seam: every command result and every diagnostic passes through here.
-//!
-//! Commands do not print. They return a value and push diagnostics, and this renders both — as
-//! human text or as tagged NDJSON — so the `--json` contract lives in one place rather than at
-//! every write site.
+//! The output seam: every command result and every diagnostic renders here, as human text or as
+//! tagged NDJSON.
 
 use std::cell::RefCell;
 use std::fmt::Display;
@@ -29,12 +26,7 @@ pub enum OutputMode {
 
 /// Where a command's output goes, and in which form.
 ///
-/// A concrete struct rather than a trait: [`Sink::out`] is generic over `Display + Serialize`, and
-/// a generic method is not object-safe, so a `Box<dyn Sink>` would not compile. Owning the writers
-/// is also what makes output assertable in tests.
-///
-/// Writes are best-effort. A failed write to stdout — a closed pipe, say — is swallowed rather than
-/// panicking, which is what `println!` would do.
+/// A concrete struct because [`Sink::out`] is generic, and a generic method is not object-safe.
 pub struct Sink {
     mode: OutputMode,
     out: RefCell<Box<dyn Write>>,
@@ -42,11 +34,7 @@ pub struct Sink {
 }
 
 impl Sink {
-    /// A sink over the process's own streams.
-    ///
-    /// In [`OutputMode::Json`] both handles are stdout: a machine consumer reading two streams
-    /// cannot rely on their relative ordering once either is redirected, and the `type` tag already
-    /// carries what the stream choice would have.
+    /// A sink over the process's own streams; in [`OutputMode::Json`] both handles are stdout.
     pub fn new(mode: OutputMode) -> Self {
         let err: Box<dyn Write> = match mode {
             OutputMode::Human => Box::new(io::stderr()),
@@ -66,40 +54,27 @@ impl Sink {
 
     /// Emits a command's result.
     ///
-    /// In [`OutputMode::Json`] the value's own fields are flattened into the tagged object, so a
-    /// consumer reads `line["placement"]` rather than `line["data"]["placement"]`. That requires
-    /// the value to serialize as a JSON object, which every command result does.
+    /// In [`OutputMode::Json`] the value's own fields are flattened into the tagged object, so the
+    /// value must serialize as a JSON object.
     pub fn out<T: Display + Serialize + ?Sized>(&self, value: &T) {
         self.emit(&self.out, "result", None, value);
     }
 
-    /// Emits a result that is the same text in either mode.
-    ///
-    /// For a value whose whole content is a document rather than fields — see
-    /// [`Cmd::TEXT_IN_BOTH_MODES`](crate::cmd::Cmd::TEXT_IN_BOTH_MODES). Takes only `Display`, since
-    /// there is deliberately no wire form to choose between.
+    /// Emits a result that is the same text in either mode — see
+    /// [`Cmd::TEXT_IN_BOTH_MODES`](crate::cmd::Cmd::TEXT_IN_BOTH_MODES).
     pub fn out_text<T: Display + ?Sized>(&self, value: &T) {
         write_line(&self.out, value);
     }
 
     /// Emits a diagnostic — a warning on a path that still succeeds.
     ///
-    /// Takes a string rather than a value, because a warning *is* a sentence: there is no
-    /// structure under it worth flattening, and the three warnings this crate emits say the
-    /// delivery was unverified or the composer could not be read. Separate from a `Result`'s `Err`
-    /// so a warning does not have to be spelled as a failure — it does not decide the exit status.
-    ///
-    /// In [`OutputMode::Json`] this goes to the *result* stream, so the whole run is one ordered
-    /// NDJSON document, and the `type` tag is what separates a warning from a result.
+    /// In [`OutputMode::Json`] it joins the *result* stream, tagged, so the run stays one ordered
+    /// NDJSON document.
     pub fn warn(&self, message: &str) {
         self.emit(self.diagnostic_stream(), "warning", None, &Warning { message });
     }
 
     /// Emits a command failure, carrying the exit status it maps to.
-    ///
-    /// The status rides in the wire form so a consumer that already has the line does not also
-    /// have to read `$?`. It is passed in rather than read off the value because the value is a
-    /// rendering of the failure, and the exit status belongs to the process.
     pub fn error<T: Display + Serialize + ?Sized>(&self, value: &T, status: u8) {
         self.emit(self.diagnostic_stream(), "error", Some(status), value);
     }
@@ -124,9 +99,8 @@ impl Sink {
             OutputMode::Human => write_line(stream, value),
             OutputMode::Json => match serde_json::to_string(&Tagged { tag, status, value }) {
                 Ok(line) => write_line(stream, &line),
-                // Only reachable for a value that does not serialize as a JSON object, which the
-                // flatten in `Tagged` requires. Reported as a line rather than swallowed, because a
-                // consumer reading NDJSON would otherwise see a silently missing record.
+                // Only reachable for a value that is not a JSON object; reported rather than
+                // silently dropped from the NDJSON stream.
                 Err(error) => write_line(stream, &format!(r#"{{"type":"error","status":1,"message":"{error}"}}"#)),
             },
         }
@@ -138,9 +112,6 @@ impl Sink {
 // =====================================================================================================================
 
 /// One NDJSON line: the tag, the exit status where there is one, then the value's own fields.
-///
-/// `#[serde(flatten)]` rather than a hand-built `serde_json::Map`, so the wire shape stays
-/// described by derives (RS-021) and field order stays declaration order.
 #[derive(Serialize)]
 struct Tagged<'a, T: Serialize + ?Sized> {
     #[serde(rename = "type")]
@@ -151,7 +122,7 @@ struct Tagged<'a, T: Serialize + ?Sized> {
     value: &'a T,
 }
 
-/// A warning's wire form — the one output the sink shapes itself, since a warning is a sentence.
+/// A warning's wire form — the one output the sink shapes itself.
 #[derive(Serialize)]
 struct Warning<'a> {
     message: &'a str,
@@ -167,12 +138,7 @@ impl Display for Warning<'_> {
 // Helpers
 // =====================================================================================================================
 
-/// Writes one rendered line to a stream and flushes it.
-///
-/// The single place an output failure is swallowed, and the only place it can be justified: the
-/// sink *is* the reporting channel, so there is nowhere to report a failed write to, and the
-/// command whose result this is has already succeeded. `println!` would panic on the same closed
-/// pipe.
+/// Writes one rendered line to a stream and flushes it — the one place a failed write is swallowed.
 fn write_line<T: Display + ?Sized>(stream: &RefCell<Box<dyn Write>>, line: &T) {
     let mut stream = stream.borrow_mut();
     let _ = writeln!(stream, "{line}");
@@ -184,9 +150,6 @@ fn write_line<T: Display + ?Sized>(stream: &RefCell<Box<dyn Write>>, line: &T) {
 // =====================================================================================================================
 
 /// A writer a test can read back, since [`Sink`] owns its writers.
-///
-/// Lives outside `mod tests` because two modules capture a sink's output — this file's own wire-form
-/// tests, and the mail envelope's check that a diagnostic names a pane and nothing else.
 #[cfg(test)]
 #[derive(Clone, Default)]
 pub(crate) struct SharedBuf(std::rc::Rc<RefCell<Vec<u8>>>);
@@ -257,8 +220,6 @@ mod tests {
 
     #[test]
     fn json_mode_flattens_the_value_into_the_tagged_object() {
-        // The tag and the status lead, then the value's own fields in declaration order — the shape
-        // the design pins. Nesting under a `data` key would make a consumer unwrap every line.
         let (sink, out, err) = sink(OutputMode::Json);
 
         sink.out(&spawned());
@@ -272,8 +233,6 @@ mod tests {
 
     #[test]
     fn json_mode_puts_warnings_on_the_result_stream_with_their_own_tag() {
-        // One ordered NDJSON document: a consumer cannot rely on two streams' relative ordering
-        // once either is redirected, and the tag carries what the stream choice would have said.
         let (sink, out, err) = sink(OutputMode::Json);
 
         sink.warn("composer could not be located");
