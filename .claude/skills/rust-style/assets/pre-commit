@@ -8,7 +8,7 @@
 STAGED=$(git diff --cached --name-only --diff-filter=ACM | grep '\.rs$' || true)
 [ -z "$STAGED" ] && exit 0
 
-GATE="$HOME/.claude/skills/rust-style/scripts/check.sh"
+GATE="$(git rev-parse --show-toplevel)/.claude/skills/rust-style/scripts/check.sh"
 if ! [ -x "$GATE" ]; then
     echo "pre-commit: rust-style gate not found at $GATE (skipping)" >&2
     exit 0
