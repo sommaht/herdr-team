@@ -23,7 +23,7 @@ worktrees/
 .claude/settings.local.json
 .superpowers/
 
-# Local working notes: machine-specific paths and references that must not ship.
+# Local working notes.
 CLAUDE.local.md
 AGENTS.local.md
 

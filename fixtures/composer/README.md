@@ -23,7 +23,7 @@ Every one has been scrubbed of anything naming a machine, a repository, or a per
 structure — line count, marker positions, escape sequences — is otherwise as captured.
 
 **The footer beneath a composer is not a fixed shape.** Claude Code's status line is
-user-configurable, and the machine these were captured on runs a custom one: three lines of
+user-configurable, and several of these captures carry a custom one: three lines of
 powerline segments where a stock install draws a single line. Codex rewrites its own footer
 depending on what the composer holds. So the `claude-stock-footer-*` pair is kept alongside the
 captures, and nothing that reads a composer may key on what sits below it.

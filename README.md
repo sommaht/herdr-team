@@ -323,6 +323,16 @@ A defect rather than a deferral: understood, reproduced, and not yet fixed.
   it landed. The report is honest — `--no-verify` is the escape for callers who already trust the
   submission — but a very long message and a proven delivery cannot currently be had together.
 
+- **An error herdr reports is repeated in herdr's own words, so herdr's restraint is part of the
+  privacy contract.** This tool's own diagnostics never carry a prompt, an agent's arguments, or
+  captured terminal content — an argument error names the argument and the rule, never the value
+  that broke it. herdr's errors pass through verbatim: a refusal's message, or the first line of
+  stderr when there is none. The argv behind them can hold protected text — the argument to
+  `agent prompt` is the prompt — so a herdr rejection that ever quoted a value back would land
+  that quote in this tool's output. Rewording herdr's diagnostics on a guess about their shape
+  would trade accuracy for a promise this tool cannot keep; carrying them verbatim keeps them
+  true and leaves what they contain to herdr.
+
 ## Roadmap
 
 Each of these is a decision to defer, not an oversight.
