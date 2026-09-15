@@ -7,7 +7,7 @@ use clap::Args;
 use serde::Serialize;
 
 use crate::cmd::{AsExitStatus, Cmd, ExitStatus};
-use crate::config::{Config, ConfigError};
+use crate::config::{Config, ConfigError, Tuning};
 use crate::core::Sink;
 
 // =====================================================================================================================
@@ -71,7 +71,7 @@ impl AgentList {
                     kind: agent.kind().to_owned(),
                     model: agent.model().map(ToOwned::to_owned),
                     effort: agent.effort().map(ToOwned::to_owned),
-                    args: agent.agent_args(),
+                    args: agent.agent_args(Tuning::default()),
                     prompt_file: agent.prompt_file().map(|path| path.display().to_string()),
                     source: agent.source().display().to_string(),
                     default: name == config.default_name(),

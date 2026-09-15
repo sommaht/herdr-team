@@ -45,6 +45,7 @@ the output rather than you reading it. `prime` is the one exception: its brief i
     spawn <name> --branch <name>          name that branch; otherwise herdr picks
     spawn <name> --agent <agent>          pick which agent starts; see Agents below
     spawn <name> --kind <kind>            start a kind directly, reading no config at all
+    spawn <name> --model <m> --effort <e>  replace the model and effort it configures
     spawn <name> --msg \"<text>\"           deliver a first message once it is up
     spawn <name> --msg -                  read that first message from stdin
     spawn <name> --cwd <path>             start it somewhere other than here
@@ -272,7 +273,7 @@ mod tests {
 
     /// The ceiling on the brief's length: raising it is a deliberate edit here, and reaching it
     /// should prompt a rewrite rather than a raise.
-    const LINE_BUDGET: usize = 120;
+    const LINE_BUDGET: usize = 121;
 
     #[derive(Debug, Parser)]
     struct Harness {

@@ -11,8 +11,9 @@ use thiserror::Error;
 use crate::cmd::msg::envelope::{OPERATOR, Reply};
 use crate::cmd::msg::{Delivery, Proof, deliver};
 use crate::cmd::{AsExitStatus, Cmd, ExitStatus};
-use crate::config::{Config, ConfigError};
+use crate::config::{Config, ConfigError, Tuning};
 use crate::core::{AgentName, Backoff, NonEmptyText, PaneId, Sink};
+use crate::harness;
 use crate::herdr::agent::{self, AgentRecord};
 use crate::herdr::surface::{self, Checkout, Focus, Placement};
 use crate::herdr::{HerdrError, HerdrRef, PANE_VARIABLE};
@@ -40,11 +41,12 @@ const DEFAULT_SETTLE_MS: u64 = 10_000;
     git diff | herdr-team spawn reviewer --msg -\n  \
     herdr-team spawn scratch --kind codex -- --no-alt-screen\n  \
     herdr-team spawn big --placement workspace --agent fable -- --resume\n  \
-    herdr-team spawn fixer --placement worktree --branch worktree/flake-fix\n\
+    herdr-team spawn fixer --placement worktree --branch worktree/flake-fix\n  \
+    herdr-team spawn quick --agent opus --model sonnet --effort low\n\
     \n\
-    A scalar an agent declares is overridden; a vector is extended. So `-- <agent args>` \
-    follows the agent's own flags rather than replacing them, and the agent CLI's last-flag-wins \
-    rule settles any conflict.")]
+    A scalar an agent declares is overridden; a vector is extended. So `--model` and `--effort` \
+    replace what the agent sets, while `-- <agent args>` follows the agent's own flags rather than \
+    replacing them, and the agent CLI's last-flag-wins rule settles any conflict.")]
 pub struct SpawnArgs {
     /// The agent's name; must satisfy herdr's rule, which is checked before anything is created.
     name: AgentName,
@@ -73,6 +75,17 @@ pub struct SpawnArgs {
     /// never heard of works the day herdr learns it.
     #[arg(long, value_name = "KIND", conflicts_with_all = ["agent", "config"])]
     kind: Option<String>,
+
+    /// The model to start with, replacing whatever the agent or `--kind` would otherwise run.
+    ///
+    /// Spelled by the harness this build resolves for the kind, so a kind it has no harness for is
+    /// refused rather than started without it.
+    #[arg(long, value_name = "MODEL")]
+    model: Option<String>,
+
+    /// The reasoning effort to start with, likewise.
+    #[arg(long, value_name = "EFFORT")]
+    effort: Option<String>,
 
     /// Renamed to `--agent`; declared only so the rename can be reported rather than guessed at.
     #[arg(long, value_name = "NAME", hide = true)]
@@ -201,14 +214,43 @@ impl SpawnArgs {
         Ok(())
     }
 
+    /// The model and effort this spawn overrides, as the two flags gave them.
+    fn tuning(&self) -> Tuning<'_> {
+        Tuning {
+            model: self.model.as_deref(),
+            effort: self.effort.as_deref(),
+        }
+    }
+
+    /// Refuses a tuning flag under a kind this build has no harness to spell it for.
+    ///
+    /// A pre-check rather than a silent drop: an agent asked for a model must not start on another.
+    fn check_tunable(&self, kind: &str) -> Result<(), SpawnError> {
+        let flags = match (self.model.is_some(), self.effort.is_some()) {
+            (true, true) => "--model and --effort",
+            (true, false) => "--model",
+            (false, true) => "--effort",
+            (false, false) => return Ok(()),
+        };
+        if harness::by_kind(kind).is_none() {
+            return Err(SpawnError::Untunable { kind: kind.to_owned(), flags });
+        }
+        Ok(())
+    }
+
     /// What to start: the kind `--kind` named, or the agent the config resolves.
     ///
     /// `--kind` reads no config at all, so a missing or malformed file cannot break that route.
     fn configured(&self, cwd: &Path, sink: &Sink) -> Result<Configured, SpawnError> {
         if let Some(kind) = &self.kind {
+            self.check_tunable(kind)?;
+            let mut args = harness::by_kind(kind)
+                .map(|harness| harness.tuning(self.model.as_deref(), self.effort.as_deref()))
+                .unwrap_or_default();
+            args.extend(self.agent_args.iter().cloned());
             return Ok(Configured {
                 kind: kind.clone(),
-                args: self.agent_args.clone(),
+                args,
                 // No config, so no agent, so nothing that could carry a brief.
                 brief: None,
             });
@@ -216,7 +258,8 @@ impl SpawnArgs {
 
         let config = Config::load(self.config.as_deref(), Some(cwd), sink)?;
         let agent = config.resolve(self.agent.as_deref())?;
-        let mut args = agent.agent_args();
+        self.check_tunable(agent.kind())?;
+        let mut args = agent.agent_args(self.tuning());
         args.extend(self.agent_args.iter().cloned());
         Ok(Configured {
             kind: agent.kind().to_owned(),
@@ -297,6 +340,7 @@ impl Cmd for SpawnArgs {
 }
 
 /// What this spawn settled on for the agent it starts.
+#[derive(Debug)]
 struct Configured {
     /// The agent kind, passed to `agent start --kind` untouched.
     kind: String,
@@ -342,7 +386,7 @@ impl SpawnArgs {
         // for the message instead.
         let proof = Proof::for_delivery(started.status(), DEFAULT_SETTLE_MS);
         // herdr's own detection, not `configured.kind`: the margin describes the pane herdr identified.
-        let margin = crate::harness::delivery_margin(started.kind());
+        let margin = harness::delivery_margin(started.kind());
         let submission = deliver(pane, &delivery, &self.reply(), &proof, margin, sink)?;
 
         // Warned out loud: only the `--json` reader sees the `delivered` field.
@@ -508,6 +552,14 @@ pub enum SpawnError {
         /// The flag that has nothing to apply to.
         flag: &'static str,
     },
+    /// A tuning flag under a kind this build has no harness to spell it for.
+    #[error("{flags} cannot be expressed for kind '{kind}'; this build expresses them for {}", harness::kinds().join(", "))]
+    Untunable {
+        /// The kind that would have been started.
+        kind: String,
+        /// Which flags were given — the spellings only, never a model or an effort.
+        flags: &'static str,
+    },
     /// A flag this build renamed.
     #[error("{old} is now {new}")]
     RenamedFlag {
@@ -585,6 +637,7 @@ impl AsExitStatus for SpawnError {
             | Self::WorktreeOnlyFlag { .. }
             | Self::ReplyFlagWithoutMessage { .. }
             | Self::RenamedFlag { .. }
+            | Self::Untunable { .. }
             | Self::ReservedName => ExitStatus::Usage,
             Self::Config(error) => error.exit_status_hint(),
             Self::NoConfig { .. } => ExitStatus::NotFound,
@@ -605,6 +658,7 @@ impl AsExitStatus for SpawnError {
             | Self::WorktreeOnlyFlag { .. }
             | Self::ReplyFlagWithoutMessage { .. }
             | Self::RenamedFlag { .. }
+            | Self::Untunable { .. }
             | Self::ReservedName
             | Self::Config(_)
             | Self::NoConfig { .. }
@@ -720,6 +774,94 @@ mod tests {
             .expect("herdr is the authority on kinds");
 
         assert_eq!(configured.kind, "some-agent-shipped-next-year");
+    }
+
+    #[test]
+    fn a_kind_is_tuned_by_the_flags_the_harness_for_it_spells() {
+        let elsewhere = tempfile::tempdir().unwrap();
+        let args = parse(&[
+            "spawn",
+            "scratch",
+            "--kind",
+            "codex",
+            "--model",
+            "gpt-5",
+            "--effort",
+            "high",
+            "--",
+            "--no-alt-screen",
+        ]);
+
+        let configured = args
+            .configured(elsewhere.path(), &Sink::new(crate::core::OutputMode::Human))
+            .expect("codex is a kind this build drives");
+
+        assert_eq!(
+            configured.args,
+            [
+                "--model",
+                "gpt-5",
+                "-c",
+                "model_reasoning_effort=high",
+                "--no-alt-screen"
+            ],
+            "the caller's own args stay last, so they still win"
+        );
+    }
+
+    #[test]
+    fn a_tuning_flag_under_a_kind_this_build_cannot_drive_is_refused_without_its_value() {
+        let elsewhere = tempfile::tempdir().unwrap();
+        let args = parse(&[
+            "spawn",
+            "scratch",
+            "--kind",
+            "some-agent-shipped-next-year",
+            "--model",
+            "gpt-9",
+        ]);
+
+        let error = args
+            .configured(elsewhere.path(), &Sink::new(crate::core::OutputMode::Human))
+            .unwrap_err();
+
+        assert_eq!(error.exit_status(), ExitStatus::Usage);
+        assert!(error.to_string().contains("--model"), "{error}");
+        assert!(!error.to_string().contains("gpt-9"), "{error}");
+    }
+
+    #[test]
+    fn a_tuning_refusal_names_every_flag_that_was_given_and_nothing_is_refused_when_none_was() {
+        let both = parse(&["spawn", "w", "--kind", "elsewhen", "--model", "m", "--effort", "e"]);
+        assert!(
+            both.check_tunable("elsewhen")
+                .unwrap_err()
+                .to_string()
+                .contains("--model and --effort"),
+            "{}",
+            both.check_tunable("elsewhen").unwrap_err()
+        );
+
+        let effort_only = parse(&["spawn", "w", "--kind", "elsewhen", "--effort", "e"]);
+        let error = effort_only.check_tunable("elsewhen").unwrap_err().to_string();
+        assert!(error.contains("--effort") && !error.contains("--model"), "{error}");
+
+        assert!(
+            parse(&["spawn", "w", "--kind", "elsewhen"])
+                .check_tunable("elsewhen")
+                .is_ok()
+        );
+    }
+
+    /// The two flags are the same type, so which one lands where is worth pinning.
+    #[test]
+    fn each_tuning_flag_becomes_the_field_of_the_override_it_is_named_for() {
+        let args = parse(&["spawn", "w", "--model", "sonnet", "--effort", "low"]);
+        let tuning = args.tuning();
+
+        assert_eq!(tuning.model, Some("sonnet"));
+        assert_eq!(tuning.effort, Some("low"));
+        assert_eq!(parse(&["spawn", "w"]).tuning().model, None);
     }
 
     #[test]

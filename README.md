@@ -151,6 +151,7 @@ line instead:
 
 ```
 herdr-team spawn scratch --kind codex -- --no-alt-screen
+herdr-team spawn scratch --kind claude --model opus --effort high
 ```
 
 The kind goes to herdr untouched, for the reason the config's own `kind` field is a plain string:
@@ -194,6 +195,18 @@ adding one flag should not have to restate the rest.
 Code takes `--model opus --effort xhigh`, Codex takes `--model … -c model_reasoning_effort=xhigh`.
 This tool knows how to drive two of herdr's kinds, so an agent that sets either under a third is
 dropped with a warning naming the kinds that can express them.
+
+`spawn --model <model>` and `spawn --effort <effort>` replace what the agent declares, for one
+launch and without editing the config:
+
+```
+herdr-team spawn quick --agent reviewer --effort low
+```
+
+They are a replacement rather than an append, so the vector carries one `--model` and not two, and
+they apply to `--kind` as well, which declares neither. Under a kind this build cannot drive either
+flag is refused outright — unlike the config's own fields, which only drop the agent — because a
+spawn that asked for a model must not quietly start on another.
 
 `prompt_file` names a file that is prepended to the agent's first prompt, resolved relative to the
 directory of the config file that declared it:

@@ -153,6 +153,17 @@ impl Layer {
 // Agents
 // =====================================================================================================================
 
+/// The model and effort an agent starts with, where a caller overrides what the agent declares.
+///
+/// Default is every field unset, which is the agent's own tuning unchanged.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Tuning<'a> {
+    /// Replaces the agent's `model` when set.
+    pub model: Option<&'a str>,
+    /// Replaces the agent's `effort` when set.
+    pub effort: Option<&'a str>,
+}
+
 /// One agent, with its base chain applied.
 #[derive(Clone, Debug, Getters)]
 pub struct Agent {
@@ -172,14 +183,18 @@ pub struct Agent {
 
 impl Agent {
     /// Every argument `agent start` receives from the config: the chain's flags, then the ones the
-    /// resolved harness spells `model` and `effort` as.
+    /// resolved harness spells `model` and `effort` as, with `tuning` standing in for either field
+    /// it overrides.
     ///
     /// The order is the precedence: agent CLIs are last-flag-wins, so a first-class field beats an
     /// `args` entry setting the same thing, and `spawn -- <extra>`, appended after this, beats both.
-    pub fn agent_args(&self) -> Vec<String> {
+    pub fn agent_args(&self, tuning: Tuning<'_>) -> Vec<String> {
         let mut args = self.args.clone();
         if let Some(harness) = harness::by_kind(&self.kind) {
-            args.extend(harness.tuning(self.model.as_deref(), self.effort.as_deref()));
+            args.extend(harness.tuning(
+                tuning.model.or(self.model.as_deref()),
+                tuning.effort.or(self.effort.as_deref()),
+            ));
         }
         args
     }
@@ -630,8 +645,40 @@ prompt_file = 'review.md'
         let config = merged(&[&path]);
 
         assert_eq!(
-            config.resolve(None).unwrap().agent_args(),
+            config.resolve(None).unwrap().agent_args(Tuning::default()),
             ["--model", "sonnet", "--model", "opus", "--effort", "xhigh"]
+        );
+    }
+
+    #[test]
+    fn a_caller_may_replace_either_tuning_field_and_leave_the_other_as_declared() {
+        let (_directory, path) = written(
+            "default = 'a'\n\n[agents.a]\nkind = 'claude'\nargs = ['--verbose']\nmodel = 'opus'\n\
+             effort = 'xhigh'\n",
+        );
+        let config = merged(&[&path]);
+        let agent = config.resolve(None).unwrap();
+
+        assert_eq!(
+            agent.agent_args(Tuning { model: Some("sonnet"), effort: None }),
+            ["--verbose", "--model", "sonnet", "--effort", "xhigh"]
+        );
+        assert_eq!(
+            agent.agent_args(Tuning { model: None, effort: Some("low") }),
+            ["--verbose", "--model", "opus", "--effort", "low"]
+        );
+    }
+
+    #[test]
+    fn a_caller_may_tune_a_field_the_agent_itself_declares_nothing_for() {
+        let (_directory, path) = written("default = 'a'\n\n[agents.a]\nkind = 'codex'\n");
+
+        assert_eq!(
+            merged(&[&path])
+                .resolve(None)
+                .unwrap()
+                .agent_args(Tuning { model: None, effort: Some("high") }),
+            ["-c", "model_reasoning_effort=high"]
         );
     }
 

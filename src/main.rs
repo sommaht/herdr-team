@@ -60,7 +60,7 @@ struct Cli {
 /// command's help lives on its `*Args` struct instead.
 #[derive(Debug, Subcommand)]
 enum Command {
-    Spawn(SpawnArgs),
+    Spawn(Box<SpawnArgs>),
     // `prompt` is the retired spelling of `msg`; hidden so the help teaches one name.
     #[command(alias = "prompt")]
     Msg(MsgArgs),
@@ -80,7 +80,7 @@ fn main() -> ExitCode {
             let sink = Sink::new(mode);
 
             match cli.command {
-                Command::Spawn(args) => run(args, &sink),
+                Command::Spawn(args) => run(*args, &sink),
                 Command::Msg(args) => run(args, &sink),
                 Command::Kill(args) => run(args, &sink),
                 Command::Agents(args) => run(args, &sink),
