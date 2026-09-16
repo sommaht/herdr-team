@@ -15,6 +15,10 @@ Discovery walks upward from the directory where you run `spawn`, all the way to 
 root. It does not stop at the Git repository boundary. The nearest config wins;
 `.herdr-team/config.toml` wins if both forms exist in the same directory.
 
+Discovered settings are trusted without confirmation and can change agent flags and instructions.
+Review them before spawning from an untrusted checkout; see the
+[repository-config trust warning](../README.md#repository-configuration-is-trusted-automatically).
+
 Project settings merge over user settings:
 
 - A project `default` replaces the user default.

@@ -141,6 +141,7 @@ Keep `--no-alt-screen` for Codex; the [configuration reference](docs/configurati
 explains its effect on delivery checks.
 
 You can also share project settings in `.herdr-team/config.toml`.
+These settings are [trusted automatically](#repository-configuration-is-trusted-automatically).
 See the [configuration reference](docs/configuration.md) for discovery rules, inheritance,
 instruction files, and overrides. [examples/config.toml](examples/config.toml) has a fuller example.
 
@@ -217,6 +218,17 @@ The [documentation index](docs/README.md) links the configuration and command re
 Use `herdr-team <command> --help` for all flags.
 
 ## Known issues
+
+### Repository configuration is trusted automatically
+
+`spawn` loads the nearest `.herdr-team/config.toml` or `.herdr-team.config.toml` without asking
+for approval. It searches from the current directory up to the filesystem root, including
+directories above the Git checkout. That config can choose the agent harness, change its flags,
+and supply instructions through `prompt_file`, including files outside the checkout.
+
+Review the config and its instruction files before spawning from an untrusted checkout.
+Use `--kind` to skip all config files. `--config` only selects the user config; discovered
+project settings still apply.
 
 ### Trust prompts can intercept the first task
 
