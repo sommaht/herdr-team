@@ -25,6 +25,11 @@ default = 'sol'
 kind = 'codex'
 args = ['--no-alt-screen']
 
+[agents.astra]
+base = 'codex'
+model = 'gpt-6-astra'
+effort = 'medium'
+
 [agents.sol]
 base = 'codex'
 model = 'gpt-5.6-sol'
@@ -33,6 +38,11 @@ effort = 'xhigh'
 [agents.terra]
 base = 'codex'
 model = 'gpt-5.6-terra'
+effort = 'high'
+
+[agents.luna]
+base = 'codex'
+model = 'gpt-5.6-luna'
 effort = 'high'
 
 # ---- claude -----------------------------------------------------------------
@@ -54,6 +64,11 @@ effort = 'xhigh'
 [agents.sonnet]
 base = 'claude'
 model = 'sonnet'
+effort = 'high'
+
+[agents.haiku]
+base = 'claude'
+model = 'haiku'
 effort = 'high'
 
 # Deliberately not based on `claude`: `args` appends down a base chain and there is
