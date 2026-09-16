@@ -53,6 +53,14 @@ a separate preset when you need a different set.
 An unknown base, an inheritance cycle, a missing kind, or unsupported model/effort settings
 make that preset unavailable. herdr-team warns and continues loading the other presets.
 
+### Codex terminal mode
+
+Keep `args = ['--no-alt-screen']` in Codex presets so messages remain in terminal scrollback.
+In alternate-screen mode, a long message can scroll its id out of the history herdr-team can
+read, preventing confirmation through the pane. This affects messages sent to a busy agent
+and messages sent with `--wait-until`; delivery can also be confirmed through an observed
+transition to `working`, which does not require reading the pane.
+
 ## Models, effort, and extra arguments
 
 `model` and `effort` use the same configuration fields for Claude Code and Codex.

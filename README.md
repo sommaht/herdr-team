@@ -1,7 +1,8 @@
 # herdr-team
 
 A small companion CLI for [herdr](https://herdr.dev) that makes it easier to launch
-coding agents and send them work. herdr runs the agents; herdr-team adds:
+coding agents and send them work. Plain herdr starts agents in existing panes at a shell prompt,
+so you first have to create a pane and find its id. herdr-team handles that setup and adds:
 
 - **Agent presets across harnesses.** Save a harness, flags, model, effort, and instructions
   under a name, then launch it with `--agent`.
@@ -33,19 +34,14 @@ herdr-team spawn reviewer --kind claude --placement tab \
   --msg "Review the changes in this repository"
 ```
 
-Send a follow-up using the name you gave it:
-
-```sh
-herdr-team msg reviewer "Also check the error paths"
-```
-
 Once it finishes, close its pane:
 
 ```sh
 herdr-team kill reviewer
 ```
 
-If the agent opens on a trust prompt, the first task may not reach its input box.
+If the agent opens on a trust prompt, the task submission can answer that dialog before you
+review it, instead of reaching the agent as a task.
 See [Known issues](#known-issues) for this and other delivery limitations.
 
 ## Common tasks
@@ -60,8 +56,8 @@ herdr-team msg reviewer "Run the tests and report any failures"
 
 ### Spawn an agent with a preset
 
-Use `--agent` to select a saved preset. This example uses `opus` from the
-[configuration below](#configuration):
+For this and the next example, first save the `opus` preset from
+[Configuration](#configuration). Use `--agent` to select it:
 
 ```sh
 herdr-team spawn coder --agent opus --placement worktree \
@@ -115,8 +111,8 @@ See the [command reference](docs/commands.md#messages-and-replies) for more on m
 
 ## Configuration
 
-Save presets in `~/.config/herdr-team/config.toml`, or
-`$XDG_CONFIG_HOME/herdr-team/config.toml` if you set `XDG_CONFIG_HOME`:
+Save presets in `$XDG_CONFIG_HOME/herdr-team/config.toml`, or
+`~/.config/herdr-team/config.toml` when `XDG_CONFIG_HOME` is unset:
 
 ```toml
 default = 'opus'
@@ -128,6 +124,7 @@ effort = 'high'
 
 [agents.codex]
 kind = 'codex'
+# Keep messages in scrollback for delivery checks.
 args = ['--no-alt-screen']
 ```
 
@@ -140,6 +137,8 @@ herdr-team spawn fixer --agent codex
 
 `reviewer` and `fixer` name the running agents. `opus` and `codex` select their presets.
 Omit `--agent` to use the configured `default`, or use `--kind` to skip configuration entirely.
+Keep `--no-alt-screen` for Codex; the [configuration reference](docs/configuration.md#codex-terminal-mode)
+explains its effect on delivery checks.
 
 You can also share project settings in `.herdr-team/config.toml`.
 See the [configuration reference](docs/configuration.md) for discovery rules, inheritance,
@@ -205,10 +204,17 @@ has not been verified here.
 `msg` checks for unsent text in the agent's input box before sending.
 `kill` checks whether the agent is working or blocked before closing its pane.
 Both refuse with exit code 5 when those checks find a conflict; `--force` overrides the check.
-See the oversized-draft limitation below.
+See the [large-draft limitation](#large-drafts-can-bypass-the-unsent-text-check).
 
-The [command reference](docs/commands.md) covers message envelopes, delivery checks,
-waiting, JSON output, and exit codes. Use `herdr-team <command> --help` for all flags.
+Exit code 0 does not guarantee delivery. Check warnings, or the `delivered` field under `--json`,
+to see whether receipt was confirmed.
+
+To wait for completion, use `msg --wait-until idle --wait-until done`; agent CLIs differ in which
+state they report when finished. For a busy agent, this can wait for its existing turn instead
+of your message's turn. See [waiting examples and timeout options](docs/commands.md#delivery-checks-and-waiting).
+
+The [documentation index](docs/README.md) links the configuration and command references.
+Use `herdr-team <command> --help` for all flags.
 
 ## Known issues
 
@@ -216,8 +222,8 @@ waiting, JSON output, and exit codes. Use `herdr-team <command> --help` for all 
 
 `spawn --msg` attempts to send the task once herdr reports the agent ready. In a new worktree,
 Claude Code may still be showing a trust prompt at that point. The submission can answer the
-dialog instead of delivering the task; in the observed case, the stalled-submission retry
-put the task in the input box.
+dialog before you review it, instead of delivering the task. In the observed case, the
+stalled-submission retry then put the task in the input box.
 
 This was observed with Claude Code using permission checks; Codex opened directly to its input
 box. To avoid the issue, spawn without `--msg`, answer the trust prompt, then send the task with
@@ -239,7 +245,7 @@ Sending to an idle agent avoids this ambiguity.
 
 ### Short timeouts disable the delivery retry
 
-At `--timeout 5000` or less, herdr reports a plain timeout instead of the stalled-submission
+At `msg --timeout 5000` or less, herdr reports a plain timeout instead of the stalled-submission
 signal that triggers a retry. A task sent just after startup can therefore be lost without the
 usual second attempt.
 
