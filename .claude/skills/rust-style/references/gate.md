@@ -260,7 +260,7 @@ so is re-covering a rule already tested at a more meaningful consumer level. Tes
 domain rule once, at the highest level that owns it.
 
 <!-- Unassigned IDs, triaged 2026-07-24: RS-053 (1:1 dependency-wrapper module as a
-per-se finding) was DECLINED by Alec — the tmux.rs seam had some value; the real defect
+per-se finding) was declined — the tmux.rs seam had some value; the real defect
 was under-use of the crate's own domain types, a domain judgment not encodable as a
 shape rule (its salvageable half lives in RS-054's last sentence). Do not re-propose.
 RS-006 (error messages prescribe the fix first) is resolved: its substance is recorded
